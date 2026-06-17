@@ -40,11 +40,11 @@ impl MouseEventModule {
 
     /// Poll shared memory and forward any pending mouse event to the CEF browser host.
     #[cfg(feature = "cef")]
-    pub fn poll(&mut self, host: &cef::BrowserHost) {
+    pub fn poll(&mut self, host: &cef::BrowserHost) -> bool {
         use cef::{ImplBrowserHost, MouseButtonType, MouseEvent as CefMouseEvent};
 
         let Some(event) = self.read_event() else {
-            return;
+            return false;
         };
 
         let mouse_ev = CefMouseEvent {
@@ -63,7 +63,7 @@ impl MouseEventModule {
                 event.delta_x as i32,
                 event.delta_y as i32,
             );
-            return;
+            return false;
         }
 
         let (button, mouse_up) = match event.event_type {
@@ -75,15 +75,20 @@ impl MouseEventModule {
             x if x == MouseEventType::MiddleUp as u8 => (MouseButtonType::MIDDLE, 1),
             other => {
                 warn!("Unknown mouse event type: {}", other);
-                return;
+                return false;
             }
         };
+
+        if cfg!(target_os = "linux") && event.event_type == MouseEventType::LeftDown as u8 {
+            host.set_focus(1);
+        }
 
         debug!(
             "Mouse click: ({},{}) button={:?} up={}",
             event.x, event.y, button, mouse_up
         );
         host.send_mouse_click_event(Some(&mouse_ev), button, mouse_up, 1);
+        event.event_type == MouseEventType::LeftUp as u8
     }
 }
 

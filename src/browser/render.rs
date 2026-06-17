@@ -14,7 +14,7 @@ use log::debug;
 use log::error;
 
 use crate::ipc::SharedMemoryWrapper;
-use crate::modules::{CaptureModule, CaretPosition};
+use crate::modules::{encode_caret_payload, CaptureModule};
 
 /// OffScreen render handler state (shared between CEF callbacks and BrowserEntry).
 #[derive(Clone)]
@@ -83,16 +83,16 @@ impl OsrRenderHandler {
         self.capture_module
             .lock()
             .map_err(|e| anyhow::anyhow!("Mutex poisoned: {}", e))?
-            .write_full_frame(width, height, pixels)?;
+            .write_paint_frame(width, height, pixels, dirty_rects)?;
 
         Ok(())
     }
 
-    fn update_caret(&self, x: i16, y: i16) {
-        let pos = CaretPosition { flag: 1, x, y };
+    fn update_caret(&self, x: i16, y: i16, height: i16) {
+        let bytes = encode_caret_payload(x, y, height);
         if let Ok(mut shmem) = self.caret_shmem.lock() {
-            let _ = shmem.write_bytes(&pos.to_bytes());
-            debug!("Caret updated: ({}, {})", x, y);
+            let _ = shmem.write_bytes(&bytes);
+            debug!("Caret updated: ({}, {}, h={})", x, y, height);
         }
     }
 }
@@ -182,6 +182,7 @@ mod cef_impl {
                     self.handler.update_caret(
                         rect.x as i16,
                         (rect.y + rect.height) as i16,
+                        rect.height as i16,
                     );
                 }
             }

@@ -4,7 +4,9 @@
 //! Creates all shared-memory modules, initialises CEF, drives the message loop,
 //! and polls input modules every tick.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 #[cfg(feature = "cef")]
@@ -17,8 +19,12 @@ use cef::*;
 use super::render::OsrRenderHandler;
 use crate::modules::{
     CaptureModule, CaretModule, ImeModule, KeyboardModule, MemoryModuleBase, MouseEventModule,
-    MouseStateModule, ScriptModule,
+    MouseStateModule, ScriptModule, SurroundingTextModule, CARET_PROBE_SCRIPT,
+    SURROUNDING_TEXT_PROBE_SCRIPT,
 };
+
+#[cfg(feature = "cef")]
+static CEF_RUNTIME_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Configuration for a browser instance.
 #[derive(Clone)]
@@ -29,6 +35,7 @@ pub struct BrowserConfig {
     pub memory_guid: String,
     pub device_scale_factor: f32,
     pub frame_rate: i32,
+    pub gpu_enabled: bool,
 }
 
 impl Default for BrowserConfig {
@@ -40,7 +47,35 @@ impl Default for BrowserConfig {
             memory_guid: uuid::Uuid::new_v4().to_string(),
             device_scale_factor: 1.0,
             frame_rate: 60,
+            gpu_enabled: detect_gpu_available(),
         }
+    }
+}
+
+fn detect_gpu_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_dir("/dev/dri")
+            .map(|entries| {
+                entries.filter_map(Result::ok).any(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .map(|name| name.starts_with("renderD"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        true
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        false
     }
 }
 
@@ -54,7 +89,8 @@ pub struct BrowserEntry {
 
     // Output modules (render thread writes to these via Arc)
     capture_module: Option<Arc<Mutex<CaptureModule>>>,
-    caret_module: Option<CaretModule>,
+    caret_module: Option<Arc<Mutex<CaretModule>>>,
+    surrounding_text_module: Option<Arc<Mutex<SurroundingTextModule>>>,
 
     // Input modules (polled on main thread each tick)
     keyboard_module: Option<KeyboardModule>,
@@ -64,6 +100,7 @@ pub struct BrowserEntry {
     script_module: Option<ScriptModule>,
 
     render_handler: Option<OsrRenderHandler>,
+    pending_probe_at: Option<Instant>,
 
     #[cfg(feature = "cef")]
     browser: Option<cef::Browser>,
@@ -84,12 +121,14 @@ impl BrowserEntry {
             running: false,
             capture_module: None,
             caret_module: None,
+            surrounding_text_module: None,
             keyboard_module: None,
             mouse_state_module: None,
             mouse_event_module: None,
             ime_module: None,
             script_module: None,
             render_handler: None,
+            pending_probe_at: None,
             #[cfg(feature = "cef")]
             browser: None,
             #[cfg(feature = "cef")]
@@ -184,8 +223,15 @@ impl BrowserEntry {
                 module.shutdown();
             }
         }
-        if let Some(mut m) = self.caret_module.take() {
-            m.shutdown();
+        if let Some(m) = self.surrounding_text_module.take() {
+            if let Ok(mut module) = m.lock() {
+                module.shutdown();
+            }
+        }
+        if let Some(m) = self.caret_module.take() {
+            if let Ok(mut module) = m.lock() {
+                module.shutdown();
+            }
         }
 
         #[cfg(feature = "cef")]
@@ -195,7 +241,6 @@ impl BrowserEntry {
                     host.close_browser(1);
                 }
             }
-            cef::shutdown();
         }
 
         self.initialized = false;
@@ -276,7 +321,14 @@ impl BrowserEntry {
 
         let caret = CaretModule::new(&format!("Caret.{}", guid))?;
         let caret_shmem = caret.get_shmem();
+        let caret = Arc::new(Mutex::new(caret));
         self.caret_module = Some(caret);
+
+        let surrounding_text = Arc::new(Mutex::new(SurroundingTextModule::new(&format!(
+            "SurroundingText.{}",
+            guid
+        ))?));
+        self.surrounding_text_module = Some(surrounding_text);
 
         // Input modules — each owns its own shmem.
         self.keyboard_module = Some(KeyboardModule::new(&format!("KeyEvent.{}", guid))?);
@@ -302,27 +354,33 @@ impl BrowserEntry {
     fn initialize_cef(&mut self) -> Result<()> {
         use super::{AppBuilder, HeadlessApp};
 
-        let app = AppBuilder::build(HeadlessApp::new());
+        if CEF_RUNTIME_INITIALIZED
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            let app = AppBuilder::build(HeadlessApp::new(self.config.gpu_enabled));
+            let args = cef::args::Args::new();
+            let settings = Settings {
+                windowless_rendering_enabled: true as _,
+                external_message_pump: true as _,
+                multi_threaded_message_loop: false as _,
+                ..Default::default()
+            };
 
-        let args = cef::args::Args::new();
+            let ok = initialize(
+                Some(args.as_main_args()),
+                Some(&settings),
+                Some(&mut app.clone()),
+                std::ptr::null_mut(),
+            );
+            if ok != 1 {
+                CEF_RUNTIME_INITIALIZED.store(false, Ordering::SeqCst);
+                ensure!(ok == 1, "cef::initialize() failed");
+            }
 
-        let settings = Settings {
-            windowless_rendering_enabled: true as _,
-            external_message_pump: true as _,
-            multi_threaded_message_loop: false as _,
-            ..Default::default()
-        };
-
-        let ok = initialize(
-            Some(args.as_main_args()),
-            Some(&settings),
-            Some(&mut app.clone()),
-            std::ptr::null_mut(),
-        );
-        ensure!(ok == 1, "cef::initialize() failed");
-
-        self.app = Some(app);
-        info!("CEF initialized");
+            self.app = Some(app);
+            info!("CEF initialized");
+        }
 
         self.create_browser()?;
         Ok(())
@@ -350,7 +408,21 @@ impl BrowserEntry {
         };
 
         let url = CefString::from(self.config.url.as_str());
-        let client = ClientBuilder::build(render_handler.clone());
+        let caret_module = self
+            .caret_module
+            .as_ref()
+            .context("Caret module not initialised before create_browser()")?
+            .clone();
+        let surrounding_text_module = self
+            .surrounding_text_module
+            .as_ref()
+            .context("SurroundingText module not initialised before create_browser()")?
+            .clone();
+        let client = ClientBuilder::build(
+            render_handler.clone(),
+            caret_module,
+            surrounding_text_module,
+        );
 
         let browser = cef::browser_host_create_browser_sync(
             Some(&window_info),
@@ -376,22 +448,48 @@ impl BrowserEntry {
             None => return,
         };
         let Some(host) = browser.host() else { return };
+        let mut should_probe = false;
 
         if let Some(ref mut m) = self.keyboard_module {
-            m.poll(&host);
+            should_probe |= m.poll(&host);
         }
         if let Some(ref mut m) = self.mouse_event_module {
-            m.poll(&host);
+            should_probe |= m.poll(&host);
         }
         if let Some(ref mut m) = self.mouse_state_module {
             m.poll(&host);
         }
-        if let Some(ref mut m) = self.ime_module {
-            m.poll(&host);
+        if let (Some(ref mut ime), Some(ref keyboard)) =
+            (&mut self.ime_module, &self.keyboard_module)
+        {
+            should_probe |= ime.poll(&host, keyboard);
         }
         if let Some(ref mut m) = self.script_module {
             m.poll(&browser);
         }
+
+        if should_probe {
+            self.request_delayed_probe();
+        }
+        self.run_delayed_probe(&browser);
+    }
+
+    fn request_delayed_probe(&mut self) {
+        self.pending_probe_at = Some(Instant::now() + Duration::from_millis(50));
+    }
+
+    #[cfg(feature = "cef")]
+    fn run_delayed_probe(&mut self, browser: &cef::Browser) {
+        let Some(deadline) = self.pending_probe_at else {
+            return;
+        };
+        if Instant::now() < deadline {
+            return;
+        }
+
+        self.pending_probe_at = None;
+        ScriptModule::execute_script(browser, CARET_PROBE_SCRIPT);
+        ScriptModule::execute_script(browser, SURROUNDING_TEXT_PROBE_SCRIPT);
     }
 }
 
@@ -406,3 +504,13 @@ impl Drop for BrowserEntry {
         self.shutdown();
     }
 }
+
+#[cfg(feature = "cef")]
+pub fn shutdown_browser_runtime() {
+    if CEF_RUNTIME_INITIALIZED.swap(false, Ordering::SeqCst) {
+        cef::shutdown();
+    }
+}
+
+#[cfg(not(feature = "cef"))]
+pub fn shutdown_browser_runtime() {}

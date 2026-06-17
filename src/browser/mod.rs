@@ -6,6 +6,6 @@ mod handler;
 mod render;
 
 pub use cef_app::*;
-pub use entry::{BrowserConfig, BrowserEntry};
+pub use entry::{shutdown_browser_runtime, BrowserConfig, BrowserEntry};
 pub use handler::PageHandler;
 pub use render::{OsrRenderHandler, RenderHandlerBuilder};
