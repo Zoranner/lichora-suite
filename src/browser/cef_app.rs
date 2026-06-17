@@ -10,7 +10,10 @@ mod cef_impl {
     use log::info;
     use std::cell::RefCell;
     use std::rc::Rc;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    };
 
     /// Headless Browser Application
     #[derive(Clone)]
@@ -185,6 +188,82 @@ mod cef_impl {
     }
 
     #[derive(Clone)]
+    pub struct HeadlessLifeSpanHandler {
+        closed: Arc<AtomicBool>,
+    }
+
+    impl HeadlessLifeSpanHandler {
+        pub fn new(closed: Arc<AtomicBool>) -> Self {
+            Self { closed }
+        }
+    }
+
+    wrap_life_span_handler! {
+        pub struct LifeSpanHandlerBuilder {
+            handler: HeadlessLifeSpanHandler,
+        }
+
+        impl LifeSpanHandler {
+            fn on_before_close(&self, _browser: Option<&mut Browser>) {
+                self.handler.closed.store(true, Ordering::SeqCst);
+                info!("CEF browser before close");
+            }
+        }
+    }
+
+    impl LifeSpanHandlerBuilder {
+        pub fn build(handler: HeadlessLifeSpanHandler) -> LifeSpanHandler {
+            Self::new(handler)
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct HeadlessLoadHandler {
+        page_loaded: Arc<AtomicBool>,
+    }
+
+    impl HeadlessLoadHandler {
+        pub fn new(page_loaded: Arc<AtomicBool>) -> Self {
+            Self { page_loaded }
+        }
+    }
+
+    wrap_load_handler! {
+        pub struct LoadHandlerBuilder {
+            handler: HeadlessLoadHandler,
+        }
+
+        impl LoadHandler {
+            fn on_loading_state_change(
+                &self,
+                browser: Option<&mut Browser>,
+                is_loading: ::std::os::raw::c_int,
+                _can_go_back: ::std::os::raw::c_int,
+                _can_go_forward: ::std::os::raw::c_int,
+            ) {
+                if is_loading != 0 {
+                    return;
+                }
+
+                self.handler.page_loaded.store(true, Ordering::SeqCst);
+                let Some(browser) = browser else {
+                    return;
+                };
+                if let Some(host) = browser.host() {
+                    reveal_and_focus_for_linux(&host);
+                    host.invalidate(PaintElementType::VIEW);
+                }
+            }
+        }
+    }
+
+    impl LoadHandlerBuilder {
+        pub fn build(handler: HeadlessLoadHandler) -> LoadHandler {
+            Self::new(handler)
+        }
+    }
+
+    #[derive(Clone)]
     pub struct HeadlessDisplayHandler {
         caret_module: Arc<Mutex<CaretModule>>,
         surrounding_text_module: Arc<Mutex<SurroundingTextModule>>,
@@ -253,6 +332,8 @@ mod cef_impl {
             client: HeadlessClient,
             render_handler: RenderHandler,
             display_handler: DisplayHandler,
+            life_span_handler: LifeSpanHandler,
+            load_handler: LoadHandler,
         }
 
         impl Client {
@@ -263,6 +344,14 @@ mod cef_impl {
             fn render_handler(&self) -> Option<RenderHandler> {
                 Some(self.render_handler.clone())
             }
+
+            fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+                Some(self.life_span_handler.clone())
+            }
+
+            fn load_handler(&self) -> Option<LoadHandler> {
+                Some(self.load_handler.clone())
+            }
         }
     }
 
@@ -271,6 +360,8 @@ mod cef_impl {
             render_handler: OsrRenderHandler,
             caret_module: Arc<Mutex<CaretModule>>,
             surrounding_text_module: Arc<Mutex<SurroundingTextModule>>,
+            closed: Arc<AtomicBool>,
+            page_loaded: Arc<AtomicBool>,
         ) -> Client {
             use crate::browser::render::RenderHandlerBuilder;
             let cef_render_handler = RenderHandlerBuilder::build(render_handler.clone());
@@ -278,13 +369,31 @@ mod cef_impl {
                 caret_module,
                 surrounding_text_module,
             ));
+            let life_span_handler =
+                LifeSpanHandlerBuilder::build(HeadlessLifeSpanHandler::new(closed));
+            let load_handler = LoadHandlerBuilder::build(HeadlessLoadHandler::new(page_loaded));
             Self::new(
                 HeadlessClient::new(render_handler),
                 cef_render_handler,
                 display_handler,
+                life_span_handler,
+                load_handler,
             )
         }
     }
+
+    pub fn reveal_and_focus_for_linux(host: &BrowserHost) {
+        reveal_and_focus_for_linux_impl(host);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn reveal_and_focus_for_linux_impl(host: &BrowserHost) {
+        host.was_hidden(0);
+        host.set_focus(1);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn reveal_and_focus_for_linux_impl(_host: &BrowserHost) {}
 }
 
 #[cfg(feature = "cef")]

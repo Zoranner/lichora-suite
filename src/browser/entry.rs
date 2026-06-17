@@ -11,12 +11,14 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 #[cfg(feature = "cef")]
 use anyhow::{ensure, Context};
-use log::info;
+use log::{info, warn};
 
 #[cfg(feature = "cef")]
 use cef::*;
 
 use super::render::OsrRenderHandler;
+#[cfg(feature = "cef")]
+use super::reveal_and_focus_for_linux;
 use crate::modules::{
     CaptureModule, CaretModule, ImeModule, KeyboardModule, MemoryModuleBase, MouseEventModule,
     MouseStateModule, ScriptModule, SurroundingTextModule, CARET_PROBE_SCRIPT,
@@ -25,6 +27,12 @@ use crate::modules::{
 
 #[cfg(feature = "cef")]
 static CEF_RUNTIME_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+const MAX_WIDTH: i32 = 2560;
+const MAX_HEIGHT: i32 = 1440;
+const REPAINT_MAX_ATTEMPTS: u8 = 12;
+const REPAINT_DELAY: Duration = Duration::from_millis(33);
+const CLOSE_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Configuration for a browser instance.
 #[derive(Clone)]
@@ -101,12 +109,28 @@ pub struct BrowserEntry {
 
     render_handler: Option<OsrRenderHandler>,
     pending_probe_at: Option<Instant>,
+    repaint_loop_id: u64,
+    pending_repaint: Option<PendingRepaint>,
+    closed: Arc<AtomicBool>,
+    page_loaded: Arc<AtomicBool>,
+    close_requested: bool,
 
     #[cfg(feature = "cef")]
     browser: Option<cef::Browser>,
 
     #[cfg(feature = "cef")]
     app: Option<cef::App>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingRepaint {
+    loop_id: u64,
+    reason: &'static str,
+    expected_width: i32,
+    expected_height: i32,
+    start_paint_sequence: u64,
+    attempts: u8,
+    next_attempt_at: Instant,
 }
 
 impl BrowserEntry {
@@ -129,6 +153,11 @@ impl BrowserEntry {
             script_module: None,
             render_handler: None,
             pending_probe_at: None,
+            repaint_loop_id: 0,
+            pending_repaint: None,
+            closed: Arc::new(AtomicBool::new(false)),
+            page_loaded: Arc::new(AtomicBool::new(false)),
+            close_requested: false,
             #[cfg(feature = "cef")]
             browser: None,
             #[cfg(feature = "cef")]
@@ -167,6 +196,8 @@ impl BrowserEntry {
         #[cfg(feature = "cef")]
         {
             cef::do_message_loop_work();
+            self.consume_page_loaded_event();
+            self.run_repaint_loop();
             self.poll_input();
         }
     }
@@ -201,6 +232,8 @@ impl BrowserEntry {
         }
         info!("Shutting down…");
         self.running = false;
+        self.repaint_loop_id = self.repaint_loop_id.wrapping_add(1);
+        self.pending_repaint = None;
 
         // Shutdown input modules
         if let Some(mut m) = self.keyboard_module.take() {
@@ -236,11 +269,19 @@ impl BrowserEntry {
 
         #[cfg(feature = "cef")]
         {
-            if let Some(browser) = self.browser.take() {
-                if let Some(host) = browser.host() {
+            let close_posted = self
+                .browser
+                .as_ref()
+                .and_then(|browser| browser.host())
+                .map(|host| {
+                    self.close_requested = true;
                     host.close_browser(1);
-                }
+                })
+                .is_some();
+            if close_posted {
+                self.wait_for_close();
             }
+            self.browser = None;
         }
 
         self.initialized = false;
@@ -289,17 +330,36 @@ impl BrowserEntry {
     }
 
     pub fn set_size(&mut self, width: i32, height: i32) {
-        self.config.width = width;
-        self.config.height = height;
+        if width <= 0 || height <= 0 {
+            return;
+        }
+
+        let clamped_width = width.min(MAX_WIDTH);
+        let clamped_height = height.min(MAX_HEIGHT);
+        if width > MAX_WIDTH || height > MAX_HEIGHT {
+            warn!(
+                "Resize request {}x{} exceeds maximum {}x{}; clamped to {}x{}",
+                width, height, MAX_WIDTH, MAX_HEIGHT, clamped_width, clamped_height
+            );
+        }
+
+        if clamped_width == self.config.width && clamped_height == self.config.height {
+            return;
+        }
+
+        self.config.width = clamped_width;
+        self.config.height = clamped_height;
         if let Some(ref rh) = self.render_handler {
-            rh.set_size(width, height);
+            rh.set_size(clamped_width, clamped_height);
         }
         #[cfg(feature = "cef")]
         if let Some(ref browser) = self.browser {
             if let Some(host) = browser.host() {
                 host.was_resized();
+                reveal_and_focus_for_linux(&host);
             }
         }
+        self.start_repaint_loop("resize", clamped_width, clamped_height);
     }
 
     pub fn is_initialized(&self) -> bool {
@@ -422,6 +482,8 @@ impl BrowserEntry {
             render_handler.clone(),
             caret_module,
             surrounding_text_module,
+            self.closed.clone(),
+            self.page_loaded.clone(),
         );
 
         let browser = cef::browser_host_create_browser_sync(
@@ -435,8 +497,117 @@ impl BrowserEntry {
         .context("browser_host_create_browser_sync() returned None")?;
 
         info!("Browser created, loading: {}", self.config.url);
+        if let Some(host) = browser.host() {
+            reveal_and_focus_for_linux(&host);
+            host.invalidate(PaintElementType::VIEW);
+        }
+        self.closed.store(false, Ordering::SeqCst);
+        self.page_loaded.store(false, Ordering::SeqCst);
         self.browser = Some(browser);
+        self.start_repaint_loop("browser-created", self.config.width, self.config.height);
         Ok(())
+    }
+
+    #[cfg(feature = "cef")]
+    fn consume_page_loaded_event(&mut self) {
+        if self.page_loaded.swap(false, Ordering::SeqCst) {
+            self.start_repaint_loop("page-loaded", self.config.width, self.config.height);
+        }
+    }
+
+    fn start_repaint_loop(
+        &mut self,
+        reason: &'static str,
+        expected_width: i32,
+        expected_height: i32,
+    ) {
+        if expected_width <= 0 || expected_height <= 0 {
+            return;
+        }
+        let Some(render_handler) = self.render_handler.as_ref() else {
+            return;
+        };
+
+        self.repaint_loop_id = self.repaint_loop_id.wrapping_add(1);
+        self.pending_repaint = Some(PendingRepaint {
+            loop_id: self.repaint_loop_id,
+            reason,
+            expected_width,
+            expected_height,
+            start_paint_sequence: render_handler.paint_snapshot().sequence,
+            attempts: 0,
+            next_attempt_at: Instant::now(),
+        });
+    }
+
+    #[cfg(feature = "cef")]
+    fn run_repaint_loop(&mut self) {
+        let Some(pending) = self.pending_repaint.as_mut() else {
+            return;
+        };
+        if pending.loop_id != self.repaint_loop_id {
+            self.pending_repaint = None;
+            return;
+        }
+
+        let Some(render_handler) = self.render_handler.as_ref() else {
+            self.pending_repaint = None;
+            return;
+        };
+
+        let snapshot = render_handler.paint_snapshot();
+        if snapshot.sequence > pending.start_paint_sequence
+            && snapshot.width == pending.expected_width
+            && snapshot.height == pending.expected_height
+        {
+            self.pending_repaint = None;
+            return;
+        }
+
+        if Instant::now() < pending.next_attempt_at {
+            return;
+        }
+
+        if pending.attempts >= REPAINT_MAX_ATTEMPTS {
+            warn!(
+                "Repaint loop timeout [{}]: target={}x{}, last={}x{}",
+                pending.reason,
+                pending.expected_width,
+                pending.expected_height,
+                snapshot.width,
+                snapshot.height
+            );
+            self.pending_repaint = None;
+            return;
+        }
+
+        pending.attempts += 1;
+        pending.next_attempt_at = Instant::now() + REPAINT_DELAY;
+        self.post_repaint_request();
+    }
+
+    #[cfg(feature = "cef")]
+    fn post_repaint_request(&self) {
+        let Some(browser) = self.browser.as_ref() else {
+            return;
+        };
+        let Some(host) = browser.host() else {
+            return;
+        };
+        reveal_and_focus_for_linux(&host);
+        host.invalidate(PaintElementType::VIEW);
+    }
+
+    #[cfg(feature = "cef")]
+    fn wait_for_close(&mut self) {
+        let deadline = Instant::now() + CLOSE_WAIT_TIMEOUT;
+        while !self.closed.load(Ordering::SeqCst) && Instant::now() < deadline {
+            cef::do_message_loop_work();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if !self.closed.load(Ordering::SeqCst) {
+            warn!("Timed out waiting for CEF browser close callback");
+        }
     }
 
     /// Poll all input modules and forward events to CEF.

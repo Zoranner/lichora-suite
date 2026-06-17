@@ -1,5 +1,7 @@
 //! Surrounding text snapshot module.
 
+use std::fmt;
+
 use anyhow::Result;
 use log::{debug, warn};
 use serde::Deserialize;
@@ -103,6 +105,34 @@ impl SurroundingTextPayload {
         buffer
     }
 
+    pub fn create_diagnostics(snapshot: &SurroundingTextSnapshot) -> SurroundingTextDiagnostics {
+        let max_text_bytes = SURROUNDING_TEXT_STACK_SIZE.saturating_sub(header_size(snapshot.kind));
+        let text_byte_length = if matches!(
+            snapshot.kind,
+            SurroundingTextKind::TextControl | SurroundingTextKind::TextControlV2
+        ) {
+            boundary_safe_text_length(&snapshot.text, max_text_bytes)
+        } else {
+            0
+        };
+        let cursor = snapshot.cursor_byte_offset.min(text_byte_length);
+        let anchor = snapshot.anchor_byte_offset.min(text_byte_length);
+        let native_ime_state = if snapshot.kind == SurroundingTextKind::UnsupportedContentEditable {
+            "not-sent"
+        } else {
+            "sent"
+        };
+
+        SurroundingTextDiagnostics {
+            kind: snapshot.kind,
+            text_utf8_byte_length: text_byte_length,
+            cursor_byte_offset: cursor,
+            anchor_byte_offset: anchor,
+            content_type: snapshot.content_type,
+            native_ime_state,
+        }
+    }
+
     pub fn from_json(json: &str) -> Option<SurroundingTextSnapshot> {
         let probe: ProbeResult = serde_json::from_str(json).ok()?;
         match probe.kind.as_str() {
@@ -117,6 +147,31 @@ impl SurroundingTextPayload {
             }
             _ => Some(SurroundingTextSnapshot::none()),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SurroundingTextDiagnostics {
+    pub kind: SurroundingTextKind,
+    pub text_utf8_byte_length: usize,
+    pub cursor_byte_offset: usize,
+    pub anchor_byte_offset: usize,
+    pub content_type: SurroundingTextContentType,
+    pub native_ime_state: &'static str,
+}
+
+impl fmt::Display for SurroundingTextDiagnostics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "kind={:?}, textUtf8Bytes={}, cursor={}, anchor={}, contentType={:?}, nativeIme={}",
+            self.kind,
+            self.text_utf8_byte_length,
+            self.cursor_byte_offset,
+            self.anchor_byte_offset,
+            self.content_type,
+            self.native_ime_state
+        )
     }
 }
 
@@ -238,14 +293,8 @@ impl SurroundingTextModule {
         let payload = SurroundingTextPayload::encode(&snapshot);
         self.shmem.write_bytes(&payload)?;
         if payload != self.last_payload {
-            debug!(
-                "SurroundingText snapshot changed: kind={:?}, bytes={}, cursor={}, anchor={}, contentType={:?}",
-                snapshot.kind,
-                i32::from_le_bytes([payload[9], payload[10], payload[11], payload[12]]),
-                i32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]),
-                i32::from_le_bytes([payload[5], payload[6], payload[7], payload[8]]),
-                snapshot.content_type
-            );
+            let diagnostics = SurroundingTextPayload::create_diagnostics(&snapshot);
+            debug!("SurroundingText snapshot changed: {diagnostics}");
             self.last_payload = payload;
         }
         Ok(())
@@ -302,6 +351,34 @@ mod tests {
     }
 
     #[test]
+    fn clamps_malformed_selection_offsets_from_probe_json() {
+        let snapshot = SurroundingTextPayload::from_json(
+            r#"{"kind":"text-control","text":"中","selectionStart":-10,"selectionEnd":50,"tagName":"INPUT","type":"text","inputMode":""}"#,
+        )
+        .unwrap();
+        assert_eq!(0, snapshot.cursor_byte_offset);
+        assert_eq!(3, snapshot.anchor_byte_offset);
+    }
+
+    #[test]
+    fn encodes_v1_text_control_payload() {
+        let snapshot = SurroundingTextSnapshot {
+            kind: SurroundingTextKind::TextControl,
+            text: "a中".to_string(),
+            cursor_byte_offset: 4,
+            anchor_byte_offset: 4,
+            content_type: SurroundingTextContentType::Normal,
+        };
+        let bytes = SurroundingTextPayload::encode(&snapshot);
+        assert_eq!(SURROUNDING_TEXT_STACK_SIZE, bytes.len());
+        assert_eq!(SurroundingTextKind::TextControl as u8, bytes[0]);
+        assert_eq!(4, i32::from_le_bytes(bytes[1..5].try_into().unwrap()));
+        assert_eq!(4, i32::from_le_bytes(bytes[5..9].try_into().unwrap()));
+        assert_eq!(4, i32::from_le_bytes(bytes[9..13].try_into().unwrap()));
+        assert_eq!("a中".as_bytes(), &bytes[13..17]);
+    }
+
+    #[test]
     fn encodes_v2_text_control_payload() {
         let snapshot = SurroundingTextSnapshot::text_control(
             "ab中".to_string(),
@@ -316,7 +393,73 @@ mod tests {
         assert_eq!(1, i32::from_le_bytes(bytes[5..9].try_into().unwrap()));
         assert_eq!(5, i32::from_le_bytes(bytes[9..13].try_into().unwrap()));
         assert_eq!(SurroundingTextContentType::Email as u8, bytes[13]);
+        assert_eq!(0, bytes[14]);
+        assert_eq!(0, bytes[15]);
+        assert_eq!(0, bytes[16]);
         assert_eq!("ab中".as_bytes(), &bytes[17..22]);
+    }
+
+    #[test]
+    fn diagnostics_omits_text_content() {
+        let secret_text = "secret-不要出现在日志里";
+        let snapshot = SurroundingTextSnapshot::text_control(
+            secret_text.to_string(),
+            secret_text.encode_utf16().count(),
+            secret_text.encode_utf16().count(),
+            SurroundingTextContentType::Email,
+        );
+        let diagnostics = SurroundingTextPayload::create_diagnostics(&snapshot);
+        let log_text = diagnostics.to_string();
+
+        assert_eq!(SurroundingTextKind::TextControlV2, diagnostics.kind);
+        assert_eq!(secret_text.len(), diagnostics.text_utf8_byte_length);
+        assert_eq!(SurroundingTextContentType::Email, diagnostics.content_type);
+        assert_eq!("sent", diagnostics.native_ime_state);
+        assert!(!log_text.contains(secret_text));
+    }
+
+    #[test]
+    fn diagnostics_marks_unsupported_contenteditable_as_not_sent() {
+        let snapshot = SurroundingTextSnapshot::unsupported_contenteditable();
+        let diagnostics = SurroundingTextPayload::create_diagnostics(&snapshot);
+        let log_text = diagnostics.to_string();
+
+        assert_eq!(
+            SurroundingTextKind::UnsupportedContentEditable,
+            diagnostics.kind
+        );
+        assert_eq!(0, diagnostics.text_utf8_byte_length);
+        assert_eq!(0, diagnostics.cursor_byte_offset);
+        assert_eq!(0, diagnostics.anchor_byte_offset);
+        assert_eq!(SurroundingTextContentType::Normal, diagnostics.content_type);
+        assert_eq!("not-sent", diagnostics.native_ime_state);
+        assert!(log_text.contains("nativeIme=not-sent"));
+    }
+
+    #[test]
+    fn truncates_payload_to_fixed_buffer() {
+        let text = "a".repeat(SURROUNDING_TEXT_STACK_SIZE);
+        let snapshot = SurroundingTextSnapshot::text_control(
+            text,
+            SURROUNDING_TEXT_STACK_SIZE,
+            SURROUNDING_TEXT_STACK_SIZE,
+            SurroundingTextContentType::Normal,
+        );
+        let bytes = SurroundingTextPayload::encode(&snapshot);
+        let expected_text_length = SURROUNDING_TEXT_STACK_SIZE - 17;
+        assert_eq!(SURROUNDING_TEXT_STACK_SIZE, bytes.len());
+        assert_eq!(
+            expected_text_length as i32,
+            i32::from_le_bytes(bytes[9..13].try_into().unwrap())
+        );
+        assert_eq!(
+            expected_text_length as i32,
+            i32::from_le_bytes(bytes[1..5].try_into().unwrap())
+        );
+        assert_eq!(
+            expected_text_length as i32,
+            i32::from_le_bytes(bytes[5..9].try_into().unwrap())
+        );
     }
 
     #[test]
@@ -333,6 +476,15 @@ mod tests {
             (SURROUNDING_TEXT_STACK_SIZE - 18) as i32,
             i32::from_le_bytes(bytes[9..13].try_into().unwrap())
         );
+        assert_eq!(
+            (SURROUNDING_TEXT_STACK_SIZE - 18) as i32,
+            i32::from_le_bytes(bytes[1..5].try_into().unwrap())
+        );
+        assert_eq!(
+            (SURROUNDING_TEXT_STACK_SIZE - 18) as i32,
+            i32::from_le_bytes(bytes[5..9].try_into().unwrap())
+        );
+        assert_eq!(0, bytes[SURROUNDING_TEXT_STACK_SIZE - 1]);
     }
 
     #[test]

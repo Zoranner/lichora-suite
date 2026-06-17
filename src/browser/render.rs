@@ -6,7 +6,10 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicI32, AtomicU64, Ordering},
+    Arc, Mutex,
+};
 
 use anyhow::Result;
 use log::debug;
@@ -22,10 +25,41 @@ pub struct OsrRenderHandler {
     width: Rc<RefCell<i32>>,
     height: Rc<RefCell<i32>>,
     device_scale_factor: f32,
+    paint_state: Arc<PaintState>,
     /// Written from `on_paint` (CEF render thread).
     capture_module: Arc<Mutex<CaptureModule>>,
     /// Written from `on_ime_composition_range_changed` (CEF render thread).
     caret_shmem: Arc<Mutex<SharedMemoryWrapper>>,
+}
+
+#[derive(Debug, Default)]
+pub struct PaintState {
+    sequence: AtomicU64,
+    width: AtomicI32,
+    height: AtomicI32,
+}
+
+impl PaintState {
+    pub fn record_paint(&self, width: i32, height: i32) {
+        self.width.store(width, Ordering::SeqCst);
+        self.height.store(height, Ordering::SeqCst);
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn snapshot(&self) -> PaintSnapshot {
+        PaintSnapshot {
+            sequence: self.sequence.load(Ordering::SeqCst),
+            width: self.width.load(Ordering::SeqCst),
+            height: self.height.load(Ordering::SeqCst),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaintSnapshot {
+    pub sequence: u64,
+    pub width: i32,
+    pub height: i32,
 }
 
 impl OsrRenderHandler {
@@ -40,6 +74,7 @@ impl OsrRenderHandler {
             width: Rc::new(RefCell::new(width)),
             height: Rc::new(RefCell::new(height)),
             device_scale_factor,
+            paint_state: Arc::new(PaintState::default()),
             capture_module,
             caret_shmem,
         }
@@ -53,6 +88,10 @@ impl OsrRenderHandler {
 
     pub fn get_size(&self) -> (i32, i32) {
         (*self.width.borrow(), *self.height.borrow())
+    }
+
+    pub fn paint_snapshot(&self) -> PaintSnapshot {
+        self.paint_state.snapshot()
     }
 
     // ------------------------------------------------------------------ //
@@ -80,6 +119,7 @@ impl OsrRenderHandler {
             dirty_rects.len()
         );
 
+        self.paint_state.record_paint(width, height);
         self.capture_module
             .lock()
             .map_err(|e| anyhow::anyhow!("Mutex poisoned: {}", e))?
