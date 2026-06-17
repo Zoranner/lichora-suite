@@ -118,6 +118,8 @@ pub struct BrowserEntry {
 
     #[cfg(feature = "cef")]
     browser: Option<cef::Browser>,
+    #[cfg(feature = "cef")]
+    browser_slot: Arc<Mutex<Option<cef::Browser>>>,
 
     #[cfg(feature = "cef")]
     app: Option<cef::App>,
@@ -162,6 +164,8 @@ impl BrowserEntry {
             close_requested: false,
             #[cfg(feature = "cef")]
             browser: None,
+            #[cfg(feature = "cef")]
+            browser_slot: Arc::new(Mutex::new(None)),
             #[cfg(feature = "cef")]
             app: None,
         }
@@ -498,19 +502,24 @@ impl BrowserEntry {
             caret_module,
             surrounding_text_module,
             self.closed.clone(),
+            self.browser_slot.clone(),
             self.page_loaded.clone(),
             self.loading.clone(),
         );
 
-        let browser = cef::browser_host_create_browser_sync(
+        let created = cef::browser_host_create_browser(
             Some(&window_info),
             Some(&mut client.clone()),
             Some(&url),
             Some(&browser_settings),
             None,
             None,
-        )
-        .context("browser_host_create_browser_sync() returned None")?;
+        ) != 0;
+        ensure!(created, "browser_host_create_browser() failed");
+
+        let browser = self
+            .wait_for_browser_created()
+            .context("Timed out waiting for CEF browser creation")?;
 
         info!("Browser created, loading: {}", self.config.url);
         if let Some(host) = browser.host() {
@@ -523,6 +532,21 @@ impl BrowserEntry {
         self.browser = Some(browser);
         self.start_repaint_loop("browser-created", self.config.width, self.config.height);
         Ok(())
+    }
+
+    #[cfg(feature = "cef")]
+    fn wait_for_browser_created(&mut self) -> Option<cef::Browser> {
+        let deadline = Instant::now() + CLOSE_WAIT_TIMEOUT;
+        while Instant::now() < deadline {
+            if let Ok(mut slot) = self.browser_slot.lock() {
+                if let Some(browser) = slot.take() {
+                    return Some(browser);
+                }
+            }
+            cef::do_message_loop_work();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        None
     }
 
     #[cfg(feature = "cef")]

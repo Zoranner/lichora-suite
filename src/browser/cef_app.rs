@@ -150,11 +150,15 @@ mod cef_impl {
     #[derive(Clone)]
     pub struct HeadlessLifeSpanHandler {
         closed: Arc<AtomicBool>,
+        browser_slot: Arc<Mutex<Option<Browser>>>,
     }
 
     impl HeadlessLifeSpanHandler {
-        pub fn new(closed: Arc<AtomicBool>) -> Self {
-            Self { closed }
+        pub fn new(closed: Arc<AtomicBool>, browser_slot: Arc<Mutex<Option<Browser>>>) -> Self {
+            Self {
+                closed,
+                browser_slot,
+            }
         }
     }
 
@@ -164,6 +168,16 @@ mod cef_impl {
         }
 
         impl LifeSpanHandler {
+            fn on_after_created(&self, browser: Option<&mut Browser>) {
+                if let Some(browser) = browser {
+                    if let Ok(mut slot) = self.handler.browser_slot.lock() {
+                        *slot = Some(browser.clone());
+                    }
+                    self.handler.closed.store(false, Ordering::SeqCst);
+                    info!("CEF browser after created");
+                }
+            }
+
             fn on_before_popup(
                 &self,
                 browser: Option<&mut Browser>,
@@ -352,6 +366,7 @@ mod cef_impl {
             caret_module: Arc<Mutex<CaretModule>>,
             surrounding_text_module: Arc<Mutex<SurroundingTextModule>>,
             closed: Arc<AtomicBool>,
+            browser_slot: Arc<Mutex<Option<Browser>>>,
             page_loaded: Arc<AtomicBool>,
             loading: Arc<AtomicBool>,
         ) -> Client {
@@ -362,7 +377,7 @@ mod cef_impl {
                 surrounding_text_module,
             ));
             let life_span_handler =
-                LifeSpanHandlerBuilder::build(HeadlessLifeSpanHandler::new(closed));
+                LifeSpanHandlerBuilder::build(HeadlessLifeSpanHandler::new(closed, browser_slot));
             let load_handler =
                 LoadHandlerBuilder::build(HeadlessLoadHandler::new(page_loaded, loading));
             Self::new(

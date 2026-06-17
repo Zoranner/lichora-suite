@@ -216,7 +216,7 @@ fn try_lock_capture(name: &str) -> Option<CaptureLockGuard> {
     use std::os::windows::ffi::OsStrExt;
     use std::ptr;
     use winapi::um::synchapi::{CreateMutexW, WaitForSingleObject};
-    use winapi::um::winbase::WAIT_OBJECT_0;
+    use winapi::um::winbase::{WAIT_ABANDONED, WAIT_OBJECT_0};
 
     let wide_name: Vec<u16> = OsStr::new(name).encode_wide().chain(Some(0)).collect();
     let handle = unsafe { CreateMutexW(ptr::null_mut(), 0, wide_name.as_ptr()) };
@@ -224,7 +224,7 @@ fn try_lock_capture(name: &str) -> Option<CaptureLockGuard> {
         return None;
     }
     let wait = unsafe { WaitForSingleObject(handle, 0) };
-    if wait != WAIT_OBJECT_0 {
+    if wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED {
         unsafe {
             winapi::um::handleapi::CloseHandle(handle);
         }
