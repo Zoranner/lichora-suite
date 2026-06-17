@@ -138,7 +138,10 @@ impl ScriptModule {
 
     /// Poll shared memory and execute any pending JavaScript via the browser's main frame.
     #[cfg(feature = "cef")]
-    pub fn poll(&mut self, browser: &cef::Browser) {
+    pub fn poll(&mut self, browser: &cef::Browser, is_loading: bool) {
+        if is_loading {
+            return;
+        }
         let Some(req) = self.read_request() else {
             return;
         };

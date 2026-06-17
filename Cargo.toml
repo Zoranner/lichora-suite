@@ -54,7 +54,7 @@ libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows-specific dependencies
-winapi = { version = "0.3", features = ["winuser", "errhandlingapi"] }
+winapi = { version = "0.3", features = ["winuser", "errhandlingapi", "synchapi", "handleapi", "winbase", "winerror"] }
 
 [dev-dependencies]
 # Testing

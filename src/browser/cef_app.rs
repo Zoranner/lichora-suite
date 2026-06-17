@@ -56,41 +56,19 @@ mod cef_impl {
                     return;
                 };
 
-                // Enable off-screen rendering
-                command_line.append_switch(Some(&"no-startup-window".into()));
-                command_line.append_switch(Some(&"noerrdialogs".into()));
-                command_line.append_switch(Some(&"hide-crash-restore-bubble".into()));
-                command_line.append_switch(Some(&"use-mock-keychain".into()));
-                command_line.append_switch(Some(&"enable-logging=stderr".into()));
+                if _process_type.and_then(CefString::as_slice).is_some() {
+                    return;
+                }
 
                 append_graphics_mode_switches(command_line, self.app.gpu_enabled);
-
-                // Enable remote debugging
-                command_line.append_switch_with_value(
-                    Some(&"remote-debugging-port".into()),
-                    Some(&"9229".into()),
-                );
                 command_line.append_switch(Some(&"enable-media-stream".into()));
                 command_line.append_switch(Some(&"use-fake-ui-for-media-stream".into()));
-
-                // Security settings
-                command_line.append_switch(Some(&"disable-web-security".into()));
-                command_line.append_switch(Some(&"allow-running-insecure-content".into()));
-                command_line.append_switch(Some(&"ignore-certificate-errors".into()));
-
-                // Stability settings
-                command_line.append_switch(Some(&"disable-session-crashed-bubble".into()));
-                command_line.append_switch(Some(&"disable-hang-monitor".into()));
-
                 append_linux_switches(command_line);
             }
 
             fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
                 Some(BrowserProcessHandlerBuilder::build(
-                    HeadlessBrowserProcessHandler::new(
-                        self.app.is_cef_ready.clone(),
-                        self.app.gpu_enabled,
-                    ),
+                    HeadlessBrowserProcessHandler::new(self.app.is_cef_ready.clone()),
                 ))
             }
         }
@@ -106,15 +84,11 @@ mod cef_impl {
     #[derive(Clone)]
     pub struct HeadlessBrowserProcessHandler {
         is_cef_ready: Rc<RefCell<bool>>,
-        gpu_enabled: bool,
     }
 
     impl HeadlessBrowserProcessHandler {
-        pub fn new(is_cef_ready: Rc<RefCell<bool>>, gpu_enabled: bool) -> Self {
-            Self {
-                is_cef_ready,
-                gpu_enabled,
-            }
+        pub fn new(is_cef_ready: Rc<RefCell<bool>>) -> Self {
+            Self { is_cef_ready }
         }
     }
 
@@ -129,21 +103,7 @@ mod cef_impl {
                 *self.handler.is_cef_ready.borrow_mut() = true;
             }
 
-            fn on_before_child_process_launch(&self, command_line: Option<&mut CommandLine>) {
-                let Some(command_line) = command_line else {
-                    return;
-                };
-
-                command_line.append_switch(Some(&"disable-web-security".into()));
-                command_line.append_switch(Some(&"allow-running-insecure-content".into()));
-                command_line.append_switch(Some(&"disable-session-crashed-bubble".into()));
-                command_line.append_switch(Some(&"ignore-certificate-errors".into()));
-                command_line.append_switch(Some(&"enable-logging=stderr".into()));
-                command_line.append_switch(Some(&"enable-media-stream".into()));
-                command_line.append_switch(Some(&"use-fake-ui-for-media-stream".into()));
-                append_graphics_mode_switches(command_line, self.handler.gpu_enabled);
-                append_linux_switches(command_line);
-            }
+            fn on_before_child_process_launch(&self, _command_line: Option<&mut CommandLine>) {}
         }
     }
 
@@ -204,6 +164,30 @@ mod cef_impl {
         }
 
         impl LifeSpanHandler {
+            fn on_before_popup(
+                &self,
+                browser: Option<&mut Browser>,
+                _frame: Option<&mut Frame>,
+                _popup_id: ::std::os::raw::c_int,
+                target_url: Option<&CefString>,
+                _target_frame_name: Option<&CefString>,
+                _target_disposition: WindowOpenDisposition,
+                _user_gesture: ::std::os::raw::c_int,
+                _popup_features: Option<&PopupFeatures>,
+                _window_info: Option<&mut WindowInfo>,
+                _client: Option<&mut Option<Client>>,
+                _settings: Option<&mut BrowserSettings>,
+                _extra_info: Option<&mut Option<DictionaryValue>>,
+                _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
+            ) -> ::std::os::raw::c_int {
+                if let (Some(browser), Some(target_url)) = (browser, target_url) {
+                    if let Some(frame) = browser.main_frame() {
+                        frame.load_url(Some(target_url));
+                    }
+                }
+                true as _
+            }
+
             fn on_before_close(&self, _browser: Option<&mut Browser>) {
                 self.handler.closed.store(true, Ordering::SeqCst);
                 info!("CEF browser before close");
@@ -220,11 +204,15 @@ mod cef_impl {
     #[derive(Clone)]
     pub struct HeadlessLoadHandler {
         page_loaded: Arc<AtomicBool>,
+        loading: Arc<AtomicBool>,
     }
 
     impl HeadlessLoadHandler {
-        pub fn new(page_loaded: Arc<AtomicBool>) -> Self {
-            Self { page_loaded }
+        pub fn new(page_loaded: Arc<AtomicBool>, loading: Arc<AtomicBool>) -> Self {
+            Self {
+                page_loaded,
+                loading,
+            }
         }
     }
 
@@ -241,6 +229,9 @@ mod cef_impl {
                 _can_go_back: ::std::os::raw::c_int,
                 _can_go_forward: ::std::os::raw::c_int,
             ) {
+                self.handler
+                    .loading
+                    .store(is_loading != 0, Ordering::SeqCst);
                 if is_loading != 0 {
                     return;
                 }
@@ -362,6 +353,7 @@ mod cef_impl {
             surrounding_text_module: Arc<Mutex<SurroundingTextModule>>,
             closed: Arc<AtomicBool>,
             page_loaded: Arc<AtomicBool>,
+            loading: Arc<AtomicBool>,
         ) -> Client {
             use crate::browser::render::RenderHandlerBuilder;
             let cef_render_handler = RenderHandlerBuilder::build(render_handler.clone());
@@ -371,7 +363,8 @@ mod cef_impl {
             ));
             let life_span_handler =
                 LifeSpanHandlerBuilder::build(HeadlessLifeSpanHandler::new(closed));
-            let load_handler = LoadHandlerBuilder::build(HeadlessLoadHandler::new(page_loaded));
+            let load_handler =
+                LoadHandlerBuilder::build(HeadlessLoadHandler::new(page_loaded, loading));
             Self::new(
                 HeadlessClient::new(render_handler),
                 cef_render_handler,

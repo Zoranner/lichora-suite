@@ -32,7 +32,7 @@ const MAX_WIDTH: i32 = 2560;
 const MAX_HEIGHT: i32 = 1440;
 const REPAINT_MAX_ATTEMPTS: u8 = 12;
 const REPAINT_DELAY: Duration = Duration::from_millis(33);
-const CLOSE_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
+const CLOSE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Configuration for a browser instance.
 #[derive(Clone)]
@@ -113,6 +113,7 @@ pub struct BrowserEntry {
     pending_repaint: Option<PendingRepaint>,
     closed: Arc<AtomicBool>,
     page_loaded: Arc<AtomicBool>,
+    loading: Arc<AtomicBool>,
     close_requested: bool,
 
     #[cfg(feature = "cef")]
@@ -157,6 +158,7 @@ impl BrowserEntry {
             pending_repaint: None,
             closed: Arc::new(AtomicBool::new(false)),
             page_loaded: Arc::new(AtomicBool::new(false)),
+            loading: Arc::new(AtomicBool::new(false)),
             close_requested: false,
             #[cfg(feature = "cef")]
             browser: None,
@@ -308,6 +310,9 @@ impl BrowserEntry {
     }
 
     pub fn execute_javascript(&mut self, _script: &str) {
+        if self.loading.load(Ordering::SeqCst) {
+            return;
+        }
         #[cfg(feature = "cef")]
         if let Some(ref browser) = self.browser {
             if let Some(frame) = browser.main_frame() {
@@ -325,6 +330,15 @@ impl BrowserEntry {
                     ..Default::default()
                 };
                 host.show_dev_tools(Some(&window_info), None, None, None);
+            }
+        }
+    }
+
+    pub fn close_devtools(&mut self) {
+        #[cfg(feature = "cef")]
+        if let Some(ref browser) = self.browser {
+            if let Some(host) = browser.host() {
+                host.close_dev_tools();
             }
         }
     }
@@ -422,7 +436,8 @@ impl BrowserEntry {
             let args = cef::args::Args::new();
             let settings = Settings {
                 windowless_rendering_enabled: true as _,
-                external_message_pump: true as _,
+                external_message_pump: false as _,
+                cache_path: CefString::from(cache_path().as_str()),
                 multi_threaded_message_loop: false as _,
                 ..Default::default()
             };
@@ -484,6 +499,7 @@ impl BrowserEntry {
             surrounding_text_module,
             self.closed.clone(),
             self.page_loaded.clone(),
+            self.loading.clone(),
         );
 
         let browser = cef::browser_host_create_browser_sync(
@@ -503,6 +519,7 @@ impl BrowserEntry {
         }
         self.closed.store(false, Ordering::SeqCst);
         self.page_loaded.store(false, Ordering::SeqCst);
+        self.loading.store(false, Ordering::SeqCst);
         self.browser = Some(browser);
         self.start_repaint_loop("browser-created", self.config.width, self.config.height);
         Ok(())
@@ -636,7 +653,7 @@ impl BrowserEntry {
             should_probe |= ime.poll(&host, keyboard);
         }
         if let Some(ref mut m) = self.script_module {
-            m.poll(&browser);
+            m.poll(&browser, self.loading.load(Ordering::SeqCst));
         }
 
         if should_probe {
@@ -659,9 +676,25 @@ impl BrowserEntry {
         }
 
         self.pending_probe_at = None;
+        if self.loading.load(Ordering::SeqCst) {
+            return;
+        }
         ScriptModule::execute_script(browser, CARET_PROBE_SCRIPT);
         ScriptModule::execute_script(browser, SURROUNDING_TEXT_PROBE_SCRIPT);
     }
+}
+
+fn cache_path() -> String {
+    let base = std::env::var("LOCALAPPDATA")
+        .or_else(|_| std::env::var("HOME").map(|home| format!("{home}/.local/share")))
+        .unwrap_or_else(|_| ".".to_string());
+    let path = std::path::Path::new(&base)
+        .join("HeadlessBrowser")
+        .join("Cache");
+    if let Err(error) = std::fs::create_dir_all(&path) {
+        warn!("Failed to create cache directory: {error}");
+    }
+    path.to_string_lossy().into_owned()
 }
 
 impl Default for BrowserEntry {

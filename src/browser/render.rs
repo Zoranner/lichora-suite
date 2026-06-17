@@ -193,12 +193,16 @@ mod cef_impl {
             fn on_paint(
                 &self,
                 _browser: Option<&mut Browser>,
-                _type_: PaintElementType,
+                type_: PaintElementType,
                 dirty_rects: Option<&[Rect]>,
                 buffer: *const u8,
                 width:  ::std::os::raw::c_int,
                 height: ::std::os::raw::c_int,
             ) {
+                if type_ != PaintElementType::VIEW {
+                    return;
+                }
+
                 let rects: Vec<(i32, i32, i32, i32)> = dirty_rects
                     .unwrap_or(&[])
                     .iter()
@@ -216,11 +220,9 @@ mod cef_impl {
                 _selected_range: Option<&Range>,
                 character_bounds: Option<&[Rect]>,
             ) {
-                // Use the bottom-left of the first character rect as the caret position
-                // (standard IME candidate-window anchor point).
-                if let Some(rect) = character_bounds.and_then(|s| s.first()) {
+                if let Some(rect) = character_bounds.and_then(|s| s.last()) {
                     self.handler.update_caret(
-                        rect.x as i16,
+                        (rect.x + rect.width) as i16,
                         (rect.y + rect.height) as i16,
                         rect.height as i16,
                     );

@@ -10,6 +10,8 @@ use headless_browser::ipc::SharedMemoryWrapper;
 use headless_browser::modules::{HandlerCommand, HeartbeatPayload};
 use log::{error, info, warn};
 
+const SINGLE_INSTANCE_LOCK: &str = "com.kimtech.headless-browser";
+
 fn main() {
     execute_cef_subprocess();
 
@@ -23,6 +25,13 @@ fn main() {
 
     // Parse command line arguments
     let args = parse_args();
+    let Some(_instance_lock) = SingleInstanceLock::acquire(SINGLE_INSTANCE_LOCK) else {
+        error!(
+            "HeadlessBrowser single-instance lock is already held: {}. handlerGuid={}",
+            SINGLE_INSTANCE_LOCK, args.guid
+        );
+        std::process::exit(73);
+    };
 
     if args.unity_handler_mode {
         run_unity_handler_mode(args);
@@ -179,8 +188,7 @@ fn handle_unity_command(
     browsers: &mut HashMap<String, BrowserEntry>,
     handler: &mut SharedMemoryWrapper,
 ) -> bool {
-    let _ = handler.write_byte_at(0, 0);
-    match command {
+    let should_continue = match command {
         HandlerCommand::Shutdown => false,
         HandlerCommand::AddBrowser {
             guid,
@@ -227,7 +235,9 @@ fn handle_unity_command(
             }
             true
         }
-    }
+    };
+    let _ = handler.write_byte_at(0, 0);
+    should_continue
 }
 
 /// Command line arguments
@@ -649,12 +659,120 @@ fn detect_gpu_available() -> bool {
 
     #[cfg(target_os = "windows")]
     {
-        true
+        detect_windows_gpu_available()
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         false
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn detect_windows_gpu_available() -> bool {
+    std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKLM\SYSTEM\CurrentControlSet\Control\Video",
+            "/s",
+            "/v",
+            "DriverDesc",
+        ])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|stdout| stdout.lines().any(has_hardware_gpu_name))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn has_hardware_gpu_name(adapter_name: &str) -> bool {
+    let normalized = adapter_name.to_ascii_lowercase();
+    !normalized.contains("microsoft basic")
+        && !normalized.contains("remote display")
+        && !normalized.contains("vmware")
+        && !normalized.contains("virtualbox")
+        && !normalized.contains("hyper-v")
+        && !normalized.contains("virtio")
+        && !normalized.contains("qxl")
+        && !normalized.contains("citrix")
+        && !normalized.contains("parallels")
+        && (normalized.contains("nvidia")
+            || normalized.contains("amd")
+            || normalized.contains("radeon")
+            || normalized.contains("intel")
+            || normalized.contains("arc"))
+}
+
+struct SingleInstanceLock {
+    #[cfg(target_os = "windows")]
+    handle: winapi::shared::ntdef::HANDLE,
+    #[cfg(target_os = "linux")]
+    file: std::fs::File,
+}
+
+impl SingleInstanceLock {
+    fn acquire(name: &str) -> Option<Self> {
+        acquire_single_instance_lock(name)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn acquire_single_instance_lock(name: &str) -> Option<SingleInstanceLock> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use winapi::shared::winerror::ERROR_ALREADY_EXISTS;
+    use winapi::um::errhandlingapi::GetLastError;
+    use winapi::um::synchapi::CreateMutexW;
+
+    let wide_name: Vec<u16> = OsStr::new(name).encode_wide().chain(Some(0)).collect();
+    let handle = unsafe { CreateMutexW(ptr::null_mut(), 0, wide_name.as_ptr()) };
+    if handle.is_null() {
+        return None;
+    }
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        unsafe {
+            winapi::um::handleapi::CloseHandle(handle);
+        }
+        return None;
+    }
+    Some(SingleInstanceLock { handle })
+}
+
+#[cfg(target_os = "linux")]
+fn acquire_single_instance_lock(name: &str) -> Option<SingleInstanceLock> {
+    use std::os::fd::AsRawFd;
+
+    let path = std::env::temp_dir().join(format!("{name}.lock"));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    (result == 0).then_some(SingleInstanceLock { file })
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn acquire_single_instance_lock(_name: &str) -> Option<SingleInstanceLock> {
+    Some(SingleInstanceLock {})
+}
+
+impl Drop for SingleInstanceLock {
+    fn drop(&mut self) {
+        #[cfg(target_os = "windows")]
+        unsafe {
+            winapi::um::handleapi::CloseHandle(self.handle);
+        }
+
+        #[cfg(target_os = "linux")]
+        unsafe {
+            use std::os::fd::AsRawFd;
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
     }
 }
 

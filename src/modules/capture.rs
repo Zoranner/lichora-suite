@@ -41,6 +41,7 @@ struct DirtyRect {
 /// `BrowserEntry` retains the Arc for lifetime management.
 pub struct CaptureModule {
     memory_name: String,
+    capture_lock: CaptureLock,
     running: bool,
     width: i32,
     height: i32,
@@ -56,6 +57,7 @@ impl CaptureModule {
         raw.initialize()?;
         Ok(Self {
             memory_name: memory_name.to_string(),
+            capture_lock: CaptureLock::new(memory_name),
             running: true,
             width,
             height,
@@ -126,6 +128,9 @@ impl CaptureModule {
         let size_changed = width != self.width || height != self.height;
         let dirty_payload = build_dirty_payload(width, height, pixels, dirty_rects, size_changed);
 
+        let Some(_capture_guard) = self.capture_lock.try_lock() else {
+            return Ok(());
+        };
         let mut shmem = self
             .shmem
             .lock()
@@ -180,6 +185,103 @@ impl CaptureModule {
     pub fn get_buffer_size(&self) -> usize {
         8 + (self.width * self.height * 4) as usize
     }
+}
+
+struct CaptureLock {
+    name: String,
+}
+
+impl CaptureLock {
+    fn new(memory_name: &str) -> Self {
+        Self {
+            name: format!("MemoryStacks_CaptureLock_{}", sanitize_name(memory_name)),
+        }
+    }
+
+    fn try_lock(&self) -> Option<CaptureLockGuard> {
+        try_lock_capture(&self.name)
+    }
+}
+
+struct CaptureLockGuard {
+    #[cfg(target_os = "windows")]
+    handle: winapi::shared::ntdef::HANDLE,
+    #[cfg(target_os = "linux")]
+    file: std::fs::File,
+}
+
+#[cfg(target_os = "windows")]
+fn try_lock_capture(name: &str) -> Option<CaptureLockGuard> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use winapi::um::synchapi::{CreateMutexW, WaitForSingleObject};
+    use winapi::um::winbase::WAIT_OBJECT_0;
+
+    let wide_name: Vec<u16> = OsStr::new(name).encode_wide().chain(Some(0)).collect();
+    let handle = unsafe { CreateMutexW(ptr::null_mut(), 0, wide_name.as_ptr()) };
+    if handle.is_null() {
+        return None;
+    }
+    let wait = unsafe { WaitForSingleObject(handle, 0) };
+    if wait != WAIT_OBJECT_0 {
+        unsafe {
+            winapi::um::handleapi::CloseHandle(handle);
+        }
+        return None;
+    }
+    Some(CaptureLockGuard { handle })
+}
+
+#[cfg(target_os = "linux")]
+fn try_lock_capture(name: &str) -> Option<CaptureLockGuard> {
+    use std::os::fd::AsRawFd;
+
+    let path = std::env::temp_dir().join(format!("{name}.lock"));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    (result == 0).then_some(CaptureLockGuard { file })
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn try_lock_capture(_name: &str) -> Option<CaptureLockGuard> {
+    Some(CaptureLockGuard {})
+}
+
+impl Drop for CaptureLockGuard {
+    fn drop(&mut self) {
+        #[cfg(target_os = "windows")]
+        unsafe {
+            winapi::um::synchapi::ReleaseMutex(self.handle);
+            winapi::um::handleapi::CloseHandle(self.handle);
+        }
+
+        #[cfg(target_os = "linux")]
+        unsafe {
+            use std::os::fd::AsRawFd;
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+fn sanitize_name(name: &str) -> String {
+    if name.trim().is_empty() {
+        return "default".to_string();
+    }
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn write_i32(buffer: &mut [u8], offset: usize, value: i32) {

@@ -37,8 +37,6 @@ pub mod browser;
 pub mod ipc;
 pub mod modules;
 
-use anyhow::Result;
-
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -50,19 +48,13 @@ pub extern "C" fn headless_browser_init() -> i32 {
         .filter_level(log::LevelFilter::Info)
         .try_init();
 
-    match init_browser() {
-        Ok(_) => 0,
-        Err(e) => {
-            log::error!("Failed to initialize browser: {}", e);
-            -1
-        }
-    }
+    0
 }
 
 /// Shutdown the headless browser (FFI entry point)
 #[no_mangle]
 pub extern "C" fn headless_browser_shutdown() -> i32 {
-    // TODO: Implement global shutdown logic
+    browser::shutdown_browser_runtime();
     0
 }
 
@@ -71,11 +63,6 @@ pub extern "C" fn headless_browser_shutdown() -> i32 {
 pub extern "C" fn headless_browser_version() -> *const i8 {
     static VERSION_BYTES: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
     VERSION_BYTES.as_ptr() as *const i8
-}
-
-fn init_browser() -> Result<()> {
-    // TODO: Implement browser initialization
-    Ok(())
 }
 
 #[cfg(test)]
