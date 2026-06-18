@@ -1,180 +1,100 @@
-# Headless Browser Rust
+# Headless Browser
 
-基于 cef-rs 的 Headless 浏览器实现，为 Unity 提供 Windows 和 Linux 支持。
+Rust/CEF headless browser process for the Unity `EmbeddedBrowser` package.
 
-## 项目状态
+当前集成方式是 Unity handler 模式：Unity 启动一个 `headless_browser.exe` 进程，并通过 `Handler.{handlerGuid}` 共享内存发送浏览器创建、移除、缩放和关闭命令。每个浏览器实例继续使用独立的模块共享内存，例如 `Capture.{browserGuid}`、`MouseState.{browserGuid}` 和 `KeyEvent.{browserGuid}`。
 
-### 阶段一：项目搭建（已完成 ✅）
+## 当前状态
 
-- [x] 项目结构搭建
-- [x] 基础模块框架
-- [x] 共享内存封装
-- [x] 开发环境脚本
-- [x] CEF 初始化实现
-- [x] OffScreen 渲染框架
-- [x] 输入模块实现
-- [x] 共享内存协议定义
-
-### 阶段二：核心功能（已完成 ✅）
-
-- [x] 输入模块与 SharedMemory 实际连接
-- [x] 键盘/鼠标/IME 事件转发到 CEF
-- [x] JavaScript 执行
-- [x] 渲染帧写入 Capture 共享内存
-- [x] 光标位置通过 on_ime_composition_range_changed 更新
-
-### 阶段三：测试部署（待开始）
-
-- [ ] Windows 环境 CEF 集成测试
-- [ ] Linux 环境 CEF 集成测试
-- [ ] Unity 集成测试
-- [ ] 性能优化
-- [ ] Windows / Linux 发布打包
+- Windows 目标产物为 `dist/win-x64/headless_browser.exe`。
+- `dist/win-x64` 同时放置 CEF runtime 文件，例如 `libcef.dll`、pak/dat/bin 文件和 `locales/`。
+- Capture 使用 v2 布局：三槽像素缓冲、32 字节 header、dirty rect payload 和 ack sequence 门控。
+- MouseState 固定为 6 字节，由 Unity 连续覆盖，Browser 端不回写 ack。
 
 ## 项目结构
 
-```
-headless_browser_rust/
-├── Cargo.toml                 # 项目配置
+```text
+headless_browser/
+├── Cargo.toml
+├── Cargo.lock
+├── build.ps1
+├── build.sh
+├── dist/
+│   └── win-x64/
+│       ├── headless_browser.exe
+│       ├── libcef.dll
+│       ├── *.pak / *.dat / *.bin
+│       └── locales/
 ├── src/
-│   ├── lib.rs                 # FFI 导出（与 Unity 通信）
-│   ├── main.rs                # 主程序入口
+│   ├── main.rs
 │   ├── browser/
-│   │   ├── mod.rs
-│   │   ├── cef_app.rs         # CEF App 和 Client 实现
-│   │   ├── entry.rs           # BrowserEntry 对应
-│   │   ├── handler.rs         # PageHandler 对应
-│   │   └── render.rs          # RenderHandler 实现
-│   ├── modules/
-│   │   ├── mod.rs
-│   │   ├── protocol.rs        # 共享内存协议定义
-│   │   ├── base.rs            # MemoryModuleBase 对应
-│   │   ├── caret.rs           # CaretModule
-│   │   ├── capture.rs         # CaptureModule
-│   │   ├── ime.rs             # ImeModule
-│   │   ├── keyboard.rs        # KeyboardModule
-│   │   ├── mouse_event.rs     # MouseEventModule
-│   │   ├── mouse_state.rs     # MouseStateModule
-│   │   └── script.rs          # ScriptModule
-│   └── ipc/
-│       └── shared_memory.rs   # 共享内存封装
-└── examples/
-    └── test_browser.rs        # 测试程序
+│   ├── ipc/
+│   └── modules/
+├── DEVELOPMENT.md
+└── PROTOCOL.md
 ```
 
-## 快速开始
+## Windows 发布目录
 
-### Linux 环境
-
-1. **安装 Rust**
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-```
-
-2. **设置 CEF 环境**
-```bash
-chmod +x setup-linux.sh
-./setup-linux.sh
-
-# 添加环境变量
-echo 'export CEF_PATH="$HOME/.local/share/cef"' >> ~/.bashrc
-echo 'export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$CEF_PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-3. **编译**
-```bash
-chmod +x build.sh
-./build.sh
-```
-
-4. **运行**
-```bash
-./target/release/headless_browser --help
-./target/release/headless_browser https://example.com
-```
-
-### Windows 环境
-
-1. **设置 CEF 环境**
 ```powershell
 .\setup-windows.ps1
-```
-
-2. **编译**
-```powershell
 .\build.ps1 -Release
 ```
 
-3. **运行**
+脚本成功后，发布目录为：
+
+```text
+dist/win-x64/
+```
+
+该目录必须包含：
+
+- `headless_browser.exe`
+- CEF runtime：`libcef.dll`、`chrome_elf.dll`、`icudtl.dat`、`resources.pak`、`chrome_*.pak`、`v8_context_snapshot.bin`、`locales/` 等
+- 可选调试文件：`headless_browser.pdb`
+
+`dist/win-x64/debug.log` 是运行期日志，不应提交。
+
+## Unity handler 模式
+
+Unity 侧启动 handler 进程时，第一个非选项参数是 handler GUID：
+
 ```powershell
-.\target\release\headless_browser.exe --help
-.\target\release\headless_browser.exe https://example.com
+.\dist\win-x64\headless_browser.exe 12345678-1234-1234-1234-123456789abc --graphics-mode=auto --heartbeat-timeout-ms=30000
 ```
 
-### 命令行参数
+进程启动后创建：
 
-```
-headless_browser [OPTIONS] [URL]
+- `Handler.{handlerGuid}`：Unity 写入管理命令，Browser 读取并清除。
+- `HEARTBEAT.{handlerGuid}`：Unity 周期性写入心跳，Browser watchdog 监控停跳。
 
-Options:
-  -u, --url <URL>      初始 URL (默认: https://example.com)
-  -w, --width <WIDTH>  浏览器宽度 (默认: 1280)
-  -h, --height <HEIGHT> 浏览器高度 (默认: 720)
-  -g, --guid <GUID>    共享内存 GUID (默认: 自动生成)
-  -s, --scale <SCALE>  设备缩放因子 (默认: 1.0)
-  -f, --fps <FPS>      帧率 (默认: 60)
-      --help           显示帮助
+浏览器实例由 `Handler` 命令创建。`AddBrowser` 命令携带 browser GUID、宽高和 URL；创建成功后该实例使用 browser GUID 派生各模块共享内存。
+
+单 URL 模式仍可用于本地手工调试：
+
+```powershell
+.\target\release\headless_browser.exe --url https://example.com --width 1280 --height 720
 ```
 
-## 共享内存协议
+不要把单 URL 模式写成 Unity 集成入口；Unity 集成入口是 handler GUID 模式。
 
-### 模块列表
+## 共享内存模块
 
 | 模块名 | 大小 | 方向 | 用途 |
-|--------|------|------|------|
-| KeyEvent | 16 字节 | Unity → Browser | 键盘输入 |
-| MouseEvents | 10 字节 | Unity → Browser | 鼠标点击/滚轮 |
-| MouseState | 6 字节 | Unity → Browser | 鼠标位置 |
-| IME | 2048 字节 | Unity → Browser | 输入法 |
-| Caret | 5 字节 | Browser → Unity | 光标位置 |
-| Capture | 变长 | Browser → Unity | 屏幕帧 |
-| Script | 10005 字节 | Unity → Browser | JS 执行 |
+| --- | --- | --- | --- |
+| `Handler` | 3000 字节 | Unity -> Browser | handler 管理命令 |
+| `HEARTBEAT` | 16 字节 | Unity -> Browser | handler 存活心跳 |
+| `KeyEvent` | 16 字节 | Unity -> Browser | 键盘输入 |
+| `MouseEvents` | 10 字节 | Unity -> Browser | 鼠标点击和滚轮 |
+| `MouseState` | 6 字节 | Unity -> Browser | 鼠标位置和按钮状态 |
+| `IME` | 2048 字节 | Unity -> Browser | 输入法 |
+| `Caret` | 5 字节 | Browser -> Unity | 光标位置 |
+| `Capture` | `3 * 2560 * 1440 * 4 + 32` 字节 | Browser -> Unity | Capture v2 帧数据 |
+| `Script` | 10005 字节 | Unity -> Browser | JavaScript 执行 |
 
-详细协议见 [PROTOCOL.md](PROTOCOL.md)
-
-## Unity 端集成
-
-### 无需修改现有代码
-
-现有的 `MemoryModuleBase.cs` 完全兼容，因为 Rust 版本实现了相同的二进制协议。
-
-### 进程启动
-
-```csharp
-// 根据平台选择不同的可执行文件
-#if UNITY_STANDALONE_LINUX
-    string browserPath = "headless_browser";
-#else
-    string browserPath = "HeadlessBrowser.exe";
-#endif
-
-// 启动进程
-Process.Start(browserPath, $"--guid {memoryGuid} --url {url}");
-```
+详细布局见 [PROTOCOL.md](PROTOCOL.md)。
 
 ## 开发文档
 
-- [开发指南](DEVELOPMENT.md)
-- [协议规范](PROTOCOL.md)
-
-## 参考资料
-
-- [cef-rs GitHub](https://github.com/tauri-apps/cef-rs)
-- [OSR 示例](https://github.com/tauri-apps/cef-rs/blob/dev/examples/osr)
-- [CEF 官方文档](https://bitbucket.org/chromiumembedded/cef)
-
-## 许可证
-
-MIT License
+- [DEVELOPMENT.md](DEVELOPMENT.md)
+- [PROTOCOL.md](PROTOCOL.md)

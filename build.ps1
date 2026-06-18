@@ -1,6 +1,6 @@
 # Build Script for Windows
 #
-# Builds the headless browser for Windows (for testing only)
+# Builds the headless browser for Windows and assembles dist/win-x64.
 
 param(
     [switch]$Release,
@@ -26,6 +26,8 @@ if ($Help) {
     Write-Host "  .\build.ps1 -NoCEF       # Debug build without CEF"
     exit 0
 }
+
+$DistDir = Join-Path $PSScriptRoot "dist\win-x64"
 
 Write-Host "=== Building Headless Browser ===" -ForegroundColor Cyan
 
@@ -76,18 +78,21 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "=== Build Complete ===" -ForegroundColor Green
 
     if ($Release) {
-        $BinaryPath = ".\target\release\headless_browser.exe"
-        $DllPath = ".\target\release\headless_browser_rust.dll"
+        $BinaryPath = Join-Path $PSScriptRoot "target\release\headless_browser.exe"
+        $PdbPath = Join-Path $PSScriptRoot "target\release\headless_browser.pdb"
     } else {
-        $BinaryPath = ".\target\debug\headless_browser.exe"
-        $DllPath = ".\target\debug\headless_browser_rust.dll"
+        $BinaryPath = Join-Path $PSScriptRoot "target\debug\headless_browser.exe"
+        $PdbPath = Join-Path $PSScriptRoot "target\debug\headless_browser.pdb"
     }
 
     if (Test-Path $BinaryPath) {
         Write-Host "Executable: $BinaryPath" -ForegroundColor Green
+        New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+        Copy-Item -Path $BinaryPath -Destination (Join-Path $DistDir "headless_browser.exe") -Force
+        Write-Host "Copied executable to: $DistDir" -ForegroundColor Green
     }
-    if (Test-Path $DllPath) {
-        Write-Host "Library: $DllPath" -ForegroundColor Green
+    if (Test-Path $PdbPath) {
+        Copy-Item -Path $PdbPath -Destination (Join-Path $DistDir "headless_browser.pdb") -Force
     }
 
     Write-Host ""
@@ -95,7 +100,39 @@ if ($LASTEXITCODE -eq 0) {
 
     if (-not $NoCEF) {
         Write-Host ""
-        Write-Host "To run, ensure CEF DLLs are in PATH or copy them to the output directory." -ForegroundColor Yellow
+        if ($env:CEF_PATH -and (Test-Path $env:CEF_PATH)) {
+            Write-Host "Copying CEF runtime to dist\win-x64..." -ForegroundColor Yellow
+            $RuntimeFiles = @(
+                "libcef.dll",
+                "chrome_elf.dll",
+                "d3dcompiler_47.dll",
+                "dxcompiler.dll",
+                "dxil.dll",
+                "libEGL.dll",
+                "libGLESv2.dll",
+                "vulkan-1.dll",
+                "vk_swiftshader.dll",
+                "vk_swiftshader_icd.json",
+                "icudtl.dat",
+                "resources.pak",
+                "chrome_100_percent.pak",
+                "chrome_200_percent.pak",
+                "v8_context_snapshot.bin"
+            )
+            foreach ($File in $RuntimeFiles) {
+                $Source = Join-Path $env:CEF_PATH $File
+                if (Test-Path $Source) {
+                    Copy-Item -Path $Source -Destination (Join-Path $DistDir $File) -Force
+                }
+            }
+            $Locales = Join-Path $env:CEF_PATH "locales"
+            if (Test-Path $Locales) {
+                Copy-Item -Path $Locales -Destination $DistDir -Recurse -Force
+            }
+            Write-Host "CEF runtime copied to: $DistDir" -ForegroundColor Green
+        } else {
+            Write-Host "CEF runtime was not copied because CEF_PATH is not set or does not exist." -ForegroundColor Yellow
+        }
     }
 } else {
     Write-Host ""

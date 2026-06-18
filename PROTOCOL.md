@@ -1,260 +1,211 @@
 # 共享内存协议规范
 
-本文档定义了 Unity (C#) 和 HeadlessBrowser (Rust) 之间的共享内存通信协议。
+本文档定义 Unity 和 `headless_browser` 之间的 MemoryStacks 共享内存协议。所有多字节字段均为 little-endian。
 
-## 通信模型
+## MemoryStacks 包装
 
-- **机制**：命名共享内存
-- **命名格式**：`{ModuleName}.{guid}`
-- **同步方式**：握手式事件系统
-- **轮询频率**：~100Hz (10ms 间隔)
+底层共享内存文件前 4 字节由 MemoryStacks 用作 payload length。本文档后续偏移均指 payload 内偏移，不包含这 4 字节长度头。
 
-### 握手协议
+普通事件模块使用首字节 flag：
 
-所有模块使用单字节标志位进行同步：
-
+```text
+[0] = 1  新数据可用
+[0] = 0  数据已处理或无效
 ```
-[0] = 1  →  新数据可用（写入方设置）
-[0] = 0  →  数据已处理（读取方处理完成后设置）
-```
+
+`MouseState` 是连续状态，不执行 Browser 端 ack；Unity 持续覆盖最新状态。
 
 ## 模块列表
 
 | 模块名 | 大小 | 方向 | 用途 |
-|--------|------|------|------|
-| KeyEvent | 16 字节 | Unity → Browser | 键盘输入事件 |
-| MouseEvents | 10 字节 | Unity → Browser | 鼠标点击和滚轮 |
-| MouseState | 6 字节 | Unity → Browser | 鼠标位置状态 |
-| IME | 2048 字节 | Unity → Browser | 输入法组合事件 |
-| Caret | 5 字节 | Browser → Unity | 光标位置 |
-| Capture | 变长 | Browser → Unity | 屏幕位图 |
-| Script | 10005 字节 | Unity → Browser | JavaScript 执行 |
+| --- | --- | --- | --- |
+| `Handler.{handlerGuid}` | 3000 字节 | Unity -> Browser | handler 管理命令 |
+| `HEARTBEAT.{handlerGuid}` | 16 字节 | Unity -> Browser | handler 心跳 |
+| `KeyEvent.{browserGuid}` | 16 字节 | Unity -> Browser | 键盘输入事件 |
+| `MouseEvents.{browserGuid}` | 10 字节 | Unity -> Browser | 鼠标点击和滚轮 |
+| `MouseState.{browserGuid}` | 6 字节 | Unity -> Browser | 鼠标位置状态 |
+| `IME.{browserGuid}` | 2048 字节 | Unity -> Browser | 输入法组合事件 |
+| `Caret.{browserGuid}` | 5 字节 | Browser -> Unity | 光标位置 |
+| `Capture.{browserGuid}` | 44236832 字节 | Browser -> Unity | Capture v2 帧数据 |
+| `Script.{browserGuid}` | 10005 字节 | Unity -> Browser | JavaScript 执行 |
 
----
+## Handler 模块
 
-## 详细协议定义
+`Handler.{handlerGuid}` 由 Unity 写入，Browser 在处理命令后清除 payload。命令大小上限为 3000 字节。
 
-### 1. Keyboard 模块 (KeyEvent.{guid})
-
-**大小**：16 字节
-
-```
-偏移  大小  类型      描述
-----  ----  --------  ---------------------------
-[0]   1     u8        事件标志 (1=新事件, 0=已处理)
-[1]   1     u8        KeyEventType 枚举
-[2]   4     i32       Windows 键码 (小端)
-[6]   4     i32       原生键码 (小端)
-[10]  1     u8        KeyModifiers 标志
-[11]  4     i32       字符 (小端)
-[15]  1     -         填充
+```text
+偏移  大小  类型    描述
+0     1     u8      flag，1=新命令
+1     1     u8      commandType，0=Shutdown，1=AddBrowser，2=RemoveBrowser，3=ResizeBrowser
+2     36    bytes   browser GUID，ASCII，空余位置填 0
+38    2     i16     width，AddBrowser/ResizeBrowser 使用
+40    2     i16     height，AddBrowser/ResizeBrowser 使用
+42    2     i16     addressLength，AddBrowser 使用
+44    N     bytes   URL UTF-8 bytes，AddBrowser 使用
 ```
 
-**KeyEventType 枚举**：
-```rust
-KeyDown = 1
-KeyUp = 2
-Char = 3
+`Shutdown` 只需要 `[flag=1, commandType=0]`。`RemoveBrowser` 只需要 flag、commandType 和 browser GUID。
+
+## Heartbeat 模块
+
+`HEARTBEAT.{handlerGuid}` 由 Unity 周期性写入，Browser handler watchdog 读取。重复或倒退的 sequence 会被忽略。
+
+```text
+偏移  大小  类型  描述
+0     8     i64   sequence，必须递增且大于 0
+8     8     i64   utcTicks
 ```
 
-**KeyModifiers 标志**：
-```rust
-None = 0
-Ctrl = 0x01
-Shift = 0x02
-Alt = 0x04
+## Keyboard 模块
+
+`KeyEvent.{browserGuid}` 大小为 16 字节。
+
+```text
+偏移  大小  类型  描述
+0     1     u8    flag，1=新事件
+1     1     u8    KeyEventType，1=KeyDown，2=KeyUp，3=Char
+2     4     i32   Windows key code
+6     4     i32   native key code
+10    1     u8    modifiers，0x01=Ctrl，0x02=Shift，0x04=Alt
+11    4     i32   character
+15    1     u8    padding
 ```
 
----
+## Mouse Events 模块
 
-### 2. Mouse Events 模块 (MouseEvents.{guid})
+`MouseEvents.{browserGuid}` 最大 10 字节。
 
-**大小**：10 字节（最大）
+点击事件使用 6 字节：
 
-#### 点击事件 (6 字节)
-```
-偏移  大小  类型      描述
-----  ----  --------  ---------------------------
-[0]   1     u8        事件标志
-[1]   1     u8        MouseEventType 枚举
-[2]   2     i16       鼠标 X 坐标 (小端)
-[4]   2     i16       鼠标 Y 坐标 (小端)
+```text
+偏移  大小  类型  描述
+0     1     u8    flag
+1     1     u8    MouseEventType，1=LeftDown，2=LeftUp，3=RightDown，4=RightUp，5=MiddleDown，6=MiddleUp
+2     2     i16   x
+4     2     i16   y
 ```
 
-#### 滚轮事件 (10 字节)
-```
-偏移  大小  类型      描述
-----  ----  --------  ---------------------------
-[0]   1     u8        事件标志
-[1]   1     u8        MouseEventType.Scroll (=7)
-[2]   2     i16       鼠标 X 坐标 (小端)
-[4]   2     i16       鼠标 Y 坐标 (小端)
-[6]   2     i16       滚轮 Delta X (小端)
-[8]   2     i16       滚轮 Delta Y (小端)
-```
+滚轮事件使用 10 字节：
 
-**MouseEventType 枚举**：
-```rust
-LeftDown = 1
-LeftUp = 2
-RightDown = 3
-RightUp = 4
-MiddleDown = 5
-MiddleUp = 6
-Scroll = 7
+```text
+偏移  大小  类型  描述
+0     1     u8    flag
+1     1     u8    MouseEventType.Scroll，值为 7
+2     2     i16   x
+4     2     i16   y
+6     2     i16   deltaX
+8     2     i16   deltaY
 ```
 
-**滚轮计算**：`delta = scrollDelta * 40`
+## Mouse State 模块
 
----
+`MouseState.{browserGuid}` 固定 6 字节。
 
-### 3. Mouse State 模块 (MouseState.{guid})
-
-**大小**：6 字节
-
-```
-偏移  大小  类型      描述
-----  ----  --------  ---------------------------
-[0]   1     u8        有效标志 (1=有效, 0=忽略)
-[1]   2     i16       鼠标 X 坐标 (小端)
-[3]   2     i16       鼠标 Y 坐标 (小端)
-[5]   1     u8        按钮状态标志
+```text
+偏移  大小  类型  描述
+0     1     u8    valid，1=有效，0=忽略
+1     2     i16   x
+3     2     i16   y
+5     1     u8    buttonState，bit0=Left，bit1=Right，bit2=Middle
 ```
 
-**按钮状态标志**：
-```rust
-bit 0 (0x01) = 左键按下
-bit 1 (0x02) = 右键按下
-bit 2 (0x04) = 中键按下
+该模块是最新状态通道，不使用 ack。Browser 端读取后合并移动事件，Unity 可以直接覆盖旧值。
+
+## IME 模块
+
+`IME.{browserGuid}` 最大 2048 字节。
+
+```text
+偏移  大小  类型    描述
+0     1     u8      flag
+1     1     u8      ImeOperationType，1=SetComposition，2=CommitText，3=CancelComposition
+2     2     i16     textLength
+4     2     i16     cursorPosition
+6     N     bytes   UTF-8 文本，最大 2040 字节
 ```
 
----
+## Caret 模块
 
-### 4. IME 模块 (IME.{guid})
+`Caret.{browserGuid}` 当前公开模块大小为 5 字节。
 
-**大小**：2048 字节（最大）
-
-```
-偏移      大小    类型      描述
-----      ----    --------  ---------------------------
-[0]       1       u8        事件标志
-[1]       1       u8        ImeOperationType 枚举
-[2]       2       i16       文本长度 (小端)
-[4]       2       i16       光标位置 (小端)
-[6-2047]  变长    byte[]    UTF-8 编码文本 (最大 2040 字节)
+```text
+偏移  大小  类型  描述
+0     1     u8    valid，1=有效
+1     2     i16   x
+3     2     i16   y
 ```
 
-**ImeOperationType 枚举**：
-```rust
-SetComposition = 1    // 设置组合预览文本
-CommitText = 2        // 提交选中文本
-CancelComposition = 3 // 取消输入法组合
+## Script 模块
+
+`Script.{browserGuid}` 最大 10005 字节。
+
+```text
+偏移  大小  类型    描述
+0     1     u8      flag，1=新脚本
+1     2     i16     scriptLength，最大 10000
+3     2     bytes   reserved
+5     N     bytes   JavaScript UTF-8 bytes
 ```
 
----
+## Capture v2 模块
 
-### 5. Caret 模块 (Caret.{guid})
+`Capture.{browserGuid}` 使用三槽 payload 加尾部 header。固定尺寸为：
 
-**大小**：5 字节
-**方向**：Browser → Unity
-
-```
-偏移  大小  类型      描述
-----  ----  --------  ---------------------------
-[0]   1     u8        有效标志 (1=有效, 0=无效)
-[1]   2     i16       光标 X 坐标 (小端)
-[3]   2     i16       光标 Y 坐标 (小端)
+```text
+slotSize = 2560 * 1440 * 4 = 14745600
+slotCount = 3
+headerSize = 32
+payloadSize = slotSize * slotCount + headerSize = 44236832
 ```
 
----
+payload 布局：
 
-### 6. Script 模块 (Script.{guid})
-
-**大小**：10005 字节（最大）
-
-```
-偏移       大小    类型      描述
-----       ----    --------  ---------------------------
-[0]        1       u8        事件标志 (1=新脚本, 0=已处理)
-[1]        2       i16       脚本长度 (小端, 最大 10000)
-[3]        2       -         保留 (填充)
-[5-10004]  变长    byte[]    UTF-8 编码 JavaScript 代码
+```text
+偏移                    大小       描述
+0                       slotSize   slot 0
+slotSize                slotSize   slot 1
+slotSize * 2            slotSize   slot 2
+slotSize * 3            32         capture header
 ```
 
----
+32 字节 capture header：
 
-### 7. Capture 模块 (Capture.{guid})
-
-**大小**：变长（取决于分辨率）
-**方向**：Browser → Unity
-
-```
-偏移      大小            类型      描述
-----      ----            --------  ---------------------------
-[0-3]     4               i32       数据宽度 (小端)
-[4-7]     4               i32       数据高度 (小端)
-[8-]      width*height*4  byte[]    BGRA 像素数据
-```
-
-**约束**：
-- 最大宽度：3840
-- 最大高度：2160
-- 像素格式：每像素 4 字节 (BGRA)
-
----
-
-## 实现注意事项
-
-### 字节序
-所有多字节字段使用**小端序**（Little-Endian）。
-
-### 内存对齐
-结构体使用 `#[repr(C, packed)]` 确保与 C# 内存布局兼容。
-
-### 线程安全
-- Unity 端：主线程写入
-- Browser 端：专用线程读取
-- 使用标志位进行简单同步，无需锁
-
-### 错误处理
-- 读取前检查数据长度
-- 解析失败时忽略当前事件
-- 标志位清除前完成所有处理
-
----
-
-## 代码示例
-
-### Rust 端读取事件
-```rust
-fn process_keyboard_event(shmem: &SharedMemoryWrapper) {
-    if let Ok(data) = shmem.read_bytes() {
-        if let Some(event) = KeyboardEvent::from_bytes(&data) {
-            if event.flag == 1 {
-                // 处理事件
-                handle_key(&event);
-
-                // 清除标志
-                shmem.write_bytes(&[0]);
-            }
-        }
-    }
-}
+```text
+偏移  大小  类型  描述
+0     4     i32   width
+4     4     i32   height
+8     4     i32   slot，当前帧所在槽，0..2
+12    4     i32   sequence，Browser 每发布一帧递增
+16    4     i32   frameType，0=full，1=dirty
+20    4     i32   rectCount，dirty frame 的矩形数量
+24    4     i32   payloadSize，当前 slot 中有效 payload 字节数
+28    4     i32   ackSequence，Unity 写回已消费的 sequence
 ```
 
-### Rust 端写入帧
-```rust
-fn write_capture_frame(shmem: &mut SharedMemoryWrapper, width: i32, height: i32, pixels: &[u8]) {
-    let frame = CaptureFrame { width, height, pixels: pixels.to_vec() };
-    let data = frame.to_bytes();
-    shmem.write_bytes(&data);
-}
+full frame payload：
+
+```text
+slotOffset  width * height * 4 bytes  BGRA pixels
 ```
 
----
+dirty frame payload 由若干 rect payload 顺序组成，每个 rect 先写 16 字节 rect header，再写该矩形逐行 BGRA 像素：
 
-## 版本历史
+```text
+偏移  大小  类型  描述
+0     4     i32   x
+4     4     i32   y
+8     4     i32   width
+12    4     i32   height
+16    N     bytes rect BGRA pixels，N = width * height * 4
+```
 
-- **v1.0** - 初始协议定义
-- 基于现有 C# 实现（CefSharp 版本）
-- 与 Unity 端 MemoryModuleBase.cs 完全兼容
+dirty frame 发布条件：
+
+- 上一帧 `sequence` 大于 0。
+- Unity 已将 header 的 `ackSequence` 写回上一帧 `sequence`。
+- CEF 提供的 dirty rect 非空，数量不超过 64。
+- 裁剪后的 dirty payload 不超过单槽容量。
+- dirty 面积小于整帧面积的 70%。
+- 尺寸未变化。
+
+任一条件不满足时，Browser 发布 full frame。Unity 消费任意 frame 后，必须把 header offset 28 的 `ackSequence` 写成已消费的 `sequence`，否则下一帧 dirty 会回退为 full frame。

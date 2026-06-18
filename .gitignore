@@ -13,3 +13,7 @@ Thumbs.db
 
 # Build artifacts
 *.pdb
+
+# Runtime logs generated beside packaged CEF runtime
+/dist/win-x64/debug.log
+/dist/debug.log
