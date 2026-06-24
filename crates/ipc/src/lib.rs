@@ -1,7 +1,14 @@
+use std::fs::{File, OpenOptions};
+use std::path::{Path, PathBuf};
+
+use memmap2::{MmapMut, MmapOptions};
+use thiserror::Error;
+
 pub const CHANNEL_MAGIC: u32 = 0x3249_4245;
 pub const PROTOCOL_VERSION_MAJOR: u16 = 2;
 pub const PROTOCOL_VERSION_MINOR: u16 = 0;
 pub const CHANNEL_HEADER_SIZE: usize = 64;
+pub const LATEST_PAYLOAD_LENGTH_SIZE: usize = 4;
 pub const FRAME_HEADER_SIZE: usize = 88;
 pub const FRAME_PIXEL_FORMAT_BGRA32: u32 = 1;
 
@@ -53,6 +60,46 @@ pub enum DecodeError {
     InvalidHeaderSize(u32),
     InvalidChannelKind(u32),
 }
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DecodeError::BufferTooSmall { expected, actual } => {
+                write!(
+                    formatter,
+                    "buffer too small: expected {expected}, actual {actual}"
+                )
+            }
+            DecodeError::InvalidMagic(magic) => write!(formatter, "invalid magic: {magic:#x}"),
+            DecodeError::UnsupportedVersion { major, minor } => {
+                write!(formatter, "unsupported version: {major}.{minor}")
+            }
+            DecodeError::InvalidHeaderSize(size) => {
+                write!(formatter, "invalid header size: {size}")
+            }
+            DecodeError::InvalidChannelKind(kind) => {
+                write!(formatter, "invalid channel kind: {kind}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
+
+#[derive(Debug, Error)]
+pub enum IpcError {
+    #[error("{0}")]
+    Decode(#[from] DecodeError),
+    #[error("payload exceeds channel capacity: payload={payload}, capacity={capacity}")]
+    PayloadExceedsCapacity { payload: usize, capacity: usize },
+    #[error("io error at {path}: {source}")]
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
+
+pub type IpcResult<T> = Result<T, IpcError>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ChannelHeader {
@@ -152,6 +199,182 @@ pub fn build_browser_channel_name(
         "EmbeddedBrowser_{session_id}_{browser_id}_{}",
         channel_kind.suffix()
     )
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChannelSpec {
+    pub name: String,
+    pub channel_kind: ChannelKind,
+    pub capacity_bytes: u32,
+}
+
+impl ChannelSpec {
+    pub fn new(name: impl Into<String>, channel_kind: ChannelKind, capacity_bytes: u32) -> Self {
+        Self {
+            name: name.into(),
+            channel_kind,
+            capacity_bytes,
+        }
+    }
+
+    pub fn mapped_len(&self) -> usize {
+        CHANNEL_HEADER_SIZE + self.capacity_bytes as usize
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChannelOpenMode {
+    Create,
+    OpenExisting,
+}
+
+#[derive(Debug)]
+pub struct LatestSnapshot {
+    pub header: ChannelHeader,
+    pub payload: Vec<u8>,
+}
+
+pub struct ChannelMappedFile {
+    mmap: MmapMut,
+    path: PathBuf,
+    capacity_bytes: usize,
+}
+
+impl ChannelMappedFile {
+    pub fn open_in_dir(
+        directory: impl AsRef<Path>,
+        spec: &ChannelSpec,
+        mode: ChannelOpenMode,
+    ) -> IpcResult<Self> {
+        let path = directory.as_ref().join(sanitize_file_name(&spec.name));
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|source| IpcError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+
+        let file = open_channel_file(&path, mode)?;
+        if mode == ChannelOpenMode::Create {
+            file.set_len(spec.mapped_len() as u64)
+                .map_err(|source| IpcError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+        }
+
+        let mmap = unsafe { MmapOptions::new().len(spec.mapped_len()).map_mut(&file) }.map_err(
+            |source| IpcError::Io {
+                path: path.clone(),
+                source,
+            },
+        )?;
+
+        let mut channel = Self {
+            mmap,
+            path,
+            capacity_bytes: spec.capacity_bytes as usize,
+        };
+
+        if mode == ChannelOpenMode::Create {
+            let mut header = ChannelHeader::new(spec.channel_kind, spec.capacity_bytes);
+            header.payload_offset = (CHANNEL_HEADER_SIZE + LATEST_PAYLOAD_LENGTH_SIZE) as u32;
+            channel.write_header(&header);
+            channel.flush()?;
+        }
+
+        Ok(channel)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn capacity_bytes(&self) -> usize {
+        self.capacity_bytes
+    }
+
+    pub fn header(&self) -> ChannelHeader {
+        ChannelHeader::decode(&self.mmap[..CHANNEL_HEADER_SIZE]).expect("valid channel header")
+    }
+
+    pub fn publish_latest(
+        &mut self,
+        producer_sequence: u64,
+        status_code: i32,
+        payload: &[u8],
+    ) -> IpcResult<()> {
+        let payload_capacity = self
+            .capacity_bytes
+            .saturating_sub(LATEST_PAYLOAD_LENGTH_SIZE);
+        if payload.len() > payload_capacity {
+            return Err(IpcError::PayloadExceedsCapacity {
+                payload: payload.len(),
+                capacity: payload_capacity,
+            });
+        }
+
+        let mut header = self.header();
+        header.header_commit = next_odd_commit(header.header_commit);
+        self.write_header(&header);
+
+        let length_start = CHANNEL_HEADER_SIZE;
+        self.mmap[length_start..length_start + LATEST_PAYLOAD_LENGTH_SIZE]
+            .copy_from_slice(&(payload.len() as u32).to_le_bytes());
+        let payload_start = header.payload_offset as usize;
+        let payload_end = payload_start + payload.len();
+        self.mmap[payload_start..payload_end].copy_from_slice(payload);
+        if payload_end < self.mmap.len() {
+            self.mmap[payload_end..].fill(0);
+        }
+
+        header.producer_sequence = producer_sequence;
+        header.status_code = status_code;
+        header.producer_ticks = current_ticks_millis();
+        header.header_commit += 1;
+        self.write_header(&header);
+        self.flush()
+    }
+
+    pub fn try_read_latest(&mut self) -> IpcResult<Option<LatestSnapshot>> {
+        let first_header = ChannelHeader::decode(&self.mmap[..CHANNEL_HEADER_SIZE])?;
+        if first_header.header_commit % 2 != 0 {
+            return Ok(None);
+        }
+
+        let length_start = CHANNEL_HEADER_SIZE;
+        let payload_len = read_u32(&self.mmap, length_start) as usize;
+        let payload_len = payload_len.min(
+            self.capacity_bytes
+                .saturating_sub(LATEST_PAYLOAD_LENGTH_SIZE),
+        );
+        let payload_start = first_header.payload_offset as usize;
+        let payload_end = payload_start + payload_len;
+        let payload = self.mmap[payload_start..payload_end].to_vec();
+
+        let second_header = ChannelHeader::decode(&self.mmap[..CHANNEL_HEADER_SIZE])?;
+        if first_header.header_commit != second_header.header_commit
+            || second_header.header_commit % 2 != 0
+        {
+            return Ok(None);
+        }
+
+        Ok(Some(LatestSnapshot {
+            header: second_header,
+            payload,
+        }))
+    }
+
+    fn write_header(&mut self, header: &ChannelHeader) {
+        self.mmap[..CHANNEL_HEADER_SIZE].copy_from_slice(&header.encode());
+    }
+
+    fn flush(&mut self) -> IpcResult<()> {
+        self.mmap.flush_async().map_err(|source| IpcError::Io {
+            path: self.path.clone(),
+            source,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -315,4 +538,45 @@ fn read_u64(buffer: &[u8], offset: usize) -> u64 {
 
 fn read_i64(buffer: &[u8], offset: usize) -> i64 {
     i64::from_le_bytes(buffer[offset..offset + 8].try_into().expect("slice length"))
+}
+
+fn open_channel_file(path: &Path, mode: ChannelOpenMode) -> IpcResult<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    if mode == ChannelOpenMode::Create {
+        options.create(true).truncate(true);
+    }
+
+    options.open(path).map_err(|source| IpcError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn sanitize_file_name(name: &str) -> String {
+    name.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn next_odd_commit(current: u64) -> u64 {
+    let next = current.saturating_add(1);
+    if next % 2 == 0 {
+        next.saturating_add(1)
+    } else {
+        next
+    }
+}
+
+fn current_ticks_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or_default()
 }

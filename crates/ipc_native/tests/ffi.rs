@@ -4,6 +4,9 @@ use ipc_native::{
 };
 use std::ffi::CStr;
 use std::ptr;
+use std::sync::{Mutex, MutexGuard};
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn error_message_returns_static_c_strings_for_known_codes() {
@@ -17,6 +20,10 @@ fn error_message_returns_static_c_strings_for_known_codes() {
 
 #[test]
 fn session_open_validates_output_pointer_and_returns_opaque_handle() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+
     assert_eq!(
         ebi_session_open(ptr::null(), 0, ptr::null_mut()),
         EBI_ERROR_INVALID_ARGUMENT
@@ -29,6 +36,34 @@ fn session_open_validates_output_pointer_and_returns_opaque_handle() {
     assert_eq!(result, EBI_OK);
     assert!(!handle.is_null());
     assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn session_open_creates_session_control_and_status_channel_files() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let session_id = b"session-42";
+    let mut handle: EbiSessionHandle = ptr::null_mut();
+
+    let result = ebi_session_open(session_id.as_ptr(), session_id.len(), &mut handle);
+
+    assert_eq!(result, EBI_OK);
+    assert!(temp
+        .path()
+        .join("EmbeddedBrowser_session-42_session")
+        .exists());
+    assert!(temp
+        .path()
+        .join("EmbeddedBrowser_session-42_control")
+        .exists());
+    assert!(temp
+        .path()
+        .join("EmbeddedBrowser_session-42_status")
+        .exists());
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
 }
 
 #[test]
@@ -38,6 +73,9 @@ fn session_close_accepts_null_as_noop() {
 
 #[test]
 fn session_open_rejects_non_utf8_session_id() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
     let session_id = [0xff, 0xfe];
     let mut handle: EbiSessionHandle = ptr::null_mut();
 
@@ -46,4 +84,9 @@ fn session_open_rejects_non_utf8_session_id() {
         EBI_ERROR_INVALID_ARGUMENT
     );
     assert!(handle.is_null());
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+fn lock_env() -> MutexGuard<'static, ()> {
+    ENV_LOCK.lock().expect("env lock")
 }

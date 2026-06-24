@@ -697,12 +697,18 @@ dependencies = [
 [[package]]
 name = "ipc"
 version = "0.1.0"
+dependencies = [
+ "memmap2",
+ "tempfile",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "ipc_native"
 version = "0.1.0"
 dependencies = [
  "ipc",
+ "tempfile",
 ]
 
 [[package]]
