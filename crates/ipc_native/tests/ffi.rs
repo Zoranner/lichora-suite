@@ -1,6 +1,7 @@
 use ipc_native::{
-    ebi_control_send, ebi_error_message, ebi_session_close, ebi_session_open, EbiSessionHandle,
-    EBI_ERROR_INVALID_ARGUMENT, EBI_ERROR_NOT_IMPLEMENTED, EBI_OK,
+    ebi_control_send, ebi_error_message, ebi_input_push_event, ebi_input_set_mouse_latest,
+    ebi_session_close, ebi_session_open, EbiSessionHandle, EBI_ERROR_INVALID_ARGUMENT,
+    EBI_ERROR_NOT_IMPLEMENTED, EBI_OK,
 };
 use std::ffi::CStr;
 use std::ptr;
@@ -92,6 +93,36 @@ fn control_send_publishes_payload_to_control_channel() {
 }
 
 #[test]
+fn input_set_mouse_latest_accepts_valid_handle() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+
+    assert_eq!(ebi_input_set_mouse_latest(handle, 10, 20, 1, 1), EBI_OK);
+
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn input_push_event_accepts_payload() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let payload = b"key";
+
+    assert_eq!(
+        ebi_input_push_event(handle, 3, 12, payload.as_ptr(), payload.len()),
+        EBI_OK
+    );
+
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
 fn session_close_accepts_null_as_noop() {
     assert_eq!(ebi_session_close(ptr::null_mut()), EBI_OK);
 }
@@ -114,4 +145,14 @@ fn session_open_rejects_non_utf8_session_id() {
 
 fn lock_env() -> MutexGuard<'static, ()> {
     ENV_LOCK.lock().expect("env lock")
+}
+
+fn open_test_session() -> EbiSessionHandle {
+    let session_id = b"session-42";
+    let mut handle: EbiSessionHandle = ptr::null_mut();
+    assert_eq!(
+        ebi_session_open(session_id.as_ptr(), session_id.len(), &mut handle),
+        EBI_OK
+    );
+    handle
 }

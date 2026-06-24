@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
@@ -97,6 +98,8 @@ pub enum IpcError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("input event queue is full: capacity={capacity}")]
+    InputQueueFull { capacity: usize },
 }
 
 pub type IpcResult<T> = Result<T, IpcError>;
@@ -385,6 +388,100 @@ pub struct SpscQueueMetadata {
     pub read_sequence: u64,
     pub dropped_count: u64,
     pub merged_count: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MouseLatest {
+    pub x: i32,
+    pub y: i32,
+    pub buttons: u32,
+    pub valid: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum InputEventKind {
+    MouseButton = 1,
+    MouseWheel = 2,
+    Keyboard = 3,
+    Ime = 4,
+    Script = 5,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InputEvent {
+    pub kind: InputEventKind,
+    pub sequence: u64,
+    pub payload: Vec<u8>,
+}
+
+impl InputEvent {
+    pub fn new(kind: InputEventKind, sequence: u64, payload: impl AsRef<[u8]>) -> Self {
+        Self {
+            kind,
+            sequence,
+            payload: payload.as_ref().to_vec(),
+        }
+    }
+}
+
+pub struct InputChannelState {
+    mouse_latest: Option<MouseLatest>,
+    events: VecDeque<InputEvent>,
+    metadata: SpscQueueMetadata,
+}
+
+impl InputChannelState {
+    pub fn new(event_capacity: u32) -> Self {
+        Self {
+            mouse_latest: None,
+            events: VecDeque::with_capacity(event_capacity as usize),
+            metadata: SpscQueueMetadata {
+                item_capacity: event_capacity,
+                item_size: 0,
+                write_sequence: 0,
+                read_sequence: 0,
+                dropped_count: 0,
+                merged_count: 0,
+            },
+        }
+    }
+
+    pub fn set_mouse_latest(&mut self, mouse: MouseLatest) {
+        if self.mouse_latest.is_some() {
+            self.metadata.merged_count = self.metadata.merged_count.saturating_add(1);
+        }
+        self.mouse_latest = Some(mouse);
+    }
+
+    pub fn mouse_latest(&self) -> Option<MouseLatest> {
+        self.mouse_latest
+    }
+
+    pub fn push_event(&mut self, event: InputEvent) -> IpcResult<()> {
+        if self.events.len() >= self.metadata.item_capacity as usize {
+            self.metadata.dropped_count = self.metadata.dropped_count.saturating_add(1);
+            return Err(IpcError::InputQueueFull {
+                capacity: self.metadata.item_capacity as usize,
+            });
+        }
+
+        self.metadata.write_sequence = self.metadata.write_sequence.saturating_add(1);
+        self.events.push_back(event);
+        Ok(())
+    }
+
+    pub fn pop_event(&mut self) -> IpcResult<Option<InputEvent>> {
+        let event = self.events.pop_front();
+        if event.is_some() {
+            self.metadata.read_sequence = self.metadata.read_sequence.saturating_add(1);
+        }
+        Ok(event)
+    }
+
+    pub fn metadata(&self) -> SpscQueueMetadata {
+        self.metadata
+    }
 }
 
 impl SpscQueueMetadata {
