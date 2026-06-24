@@ -1,5 +1,5 @@
 use ipc_native::{
-    ebi_error_message, ebi_session_close, ebi_session_open, EbiSessionHandle,
+    ebi_control_send, ebi_error_message, ebi_session_close, ebi_session_open, EbiSessionHandle,
     EBI_ERROR_INVALID_ARGUMENT, EBI_ERROR_NOT_IMPLEMENTED, EBI_OK,
 };
 use std::ffi::CStr;
@@ -62,6 +62,31 @@ fn session_open_creates_session_control_and_status_channel_files() {
         .path()
         .join("EmbeddedBrowser_session-42_status")
         .exists());
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn control_send_publishes_payload_to_control_channel() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let session_id = b"session-42";
+    let mut handle: EbiSessionHandle = ptr::null_mut();
+    assert_eq!(
+        ebi_session_open(session_id.as_ptr(), session_id.len(), &mut handle),
+        EBI_OK
+    );
+
+    let payload = b"add-browser";
+    assert_eq!(
+        ebi_control_send(handle, 11, payload.as_ptr(), payload.len()),
+        EBI_OK
+    );
+
+    let control_path = temp.path().join("EmbeddedBrowser_session-42_control");
+    let bytes = std::fs::read(control_path).unwrap();
+    assert_eq!(&bytes[68..68 + payload.len()], payload);
     assert_eq!(ebi_session_close(handle), EBI_OK);
     std::env::remove_var("EBI_IPC_DIR");
 }

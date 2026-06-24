@@ -93,6 +93,27 @@ pub extern "C" fn ebi_session_close(handle: EbiSessionHandle) -> EbiErrorCode {
     })
 }
 
+#[no_mangle]
+pub extern "C" fn ebi_control_send(
+    handle: EbiSessionHandle,
+    sequence: u64,
+    payload_ptr: *const u8,
+    payload_len: usize,
+) -> EbiErrorCode {
+    ffi_boundary(|| {
+        if handle.is_null() || payload_ptr.is_null() {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let payload = unsafe { std::slice::from_raw_parts(payload_ptr, payload_len) };
+        let session = unsafe { &mut *handle };
+        match session.control_channel.publish_latest(sequence, 0, payload) {
+            Ok(()) => EBI_OK,
+            Err(_) => EBI_ERROR_IO,
+        }
+    })
+}
+
 fn ffi_boundary(call: impl FnOnce() -> EbiErrorCode) -> EbiErrorCode {
     catch_unwind(AssertUnwindSafe(call)).unwrap_or(EBI_ERROR_PANIC)
 }
