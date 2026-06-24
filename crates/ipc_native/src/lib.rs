@@ -21,6 +21,11 @@ pub const EBI_ERROR_BUFFER_TOO_SMALL: EbiErrorCode = 4;
 pub const EBI_ERROR_QUEUE_FULL: EbiErrorCode = 5;
 pub const EBI_ERROR_PANIC: EbiErrorCode = 100;
 
+const INPUT_LATEST_CAPACITY_BYTES: u32 = 64;
+const INPUT_QUEUE_ITEM_CAPACITY: u32 = 1024;
+const INPUT_QUEUE_MAX_PAYLOAD_LEN: u32 = 16 * 1024;
+const MOUSE_LATEST_PAYLOAD_LEN: usize = 16;
+
 #[repr(C)]
 pub struct EbiSession {
     session_id: String,
@@ -214,6 +219,84 @@ pub extern "C" fn ebi_input_push_event(
 }
 
 #[no_mangle]
+pub extern "C" fn ebi_input_set_mouse_latest_for_browser(
+    handle: EbiSessionHandle,
+    browser_id_ptr: *const u8,
+    browser_id_len: usize,
+    x: i32,
+    y: i32,
+    buttons: u32,
+    valid: u8,
+) -> EbiErrorCode {
+    ffi_boundary(|| {
+        if handle.is_null() || browser_id_ptr.is_null() || browser_id_len == 0 {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let Some(browser_id) = read_ffi_string(browser_id_ptr, browser_id_len) else {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        };
+        if !is_valid_browser_id(&browser_id) {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let session = unsafe { &mut *handle };
+        let mut channel = match open_input_latest_channel(&session.session_id, &browser_id) {
+            Ok(channel) => channel,
+            Err(_) => return EBI_ERROR_IO,
+        };
+        let payload = encode_mouse_latest_payload(x, y, buttons, valid != 0);
+        match channel.publish_latest(0, 0, &payload) {
+            Ok(()) => EBI_OK,
+            Err(ipc::IpcError::PayloadExceedsCapacity { .. }) => EBI_ERROR_BUFFER_TOO_SMALL,
+            Err(_) => EBI_ERROR_IO,
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn ebi_input_push_event_for_browser(
+    handle: EbiSessionHandle,
+    browser_id_ptr: *const u8,
+    browser_id_len: usize,
+    kind: u32,
+    sequence: u64,
+    payload_ptr: *const u8,
+    payload_len: usize,
+) -> EbiErrorCode {
+    ffi_boundary(|| {
+        if handle.is_null()
+            || browser_id_ptr.is_null()
+            || browser_id_len == 0
+            || payload_ptr.is_null()
+        {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let Some(browser_id) = read_ffi_string(browser_id_ptr, browser_id_len) else {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        };
+        if !is_valid_browser_id(&browser_id) {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+        if input_event_kind_from_u32(kind).is_none() {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let payload = unsafe { std::slice::from_raw_parts(payload_ptr, payload_len) };
+        let session = unsafe { &mut *handle };
+        match open_input_queue(&session.session_id, &browser_id)
+            .and_then(|mut queue| queue.try_push(MappedQueueItem::new(kind, sequence, payload)))
+        {
+            Ok(()) => EBI_OK,
+            Err(ipc::MappedQueueError::QueueFull { .. }) => EBI_ERROR_QUEUE_FULL,
+            Err(ipc::MappedQueueError::PayloadTooLarge { .. }) => EBI_ERROR_BUFFER_TOO_SMALL,
+            Err(_) => EBI_ERROR_IO,
+        }
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn ebi_status_read(
     handle: EbiSessionHandle,
     buffer_ptr: *mut u8,
@@ -317,6 +400,48 @@ fn control_queue_spec(session_id: &str) -> MappedQueueSpec {
     )
 }
 
+fn open_input_latest_channel(
+    session_id: &str,
+    browser_id: &str,
+) -> Result<ChannelMappedFile, ipc::IpcError> {
+    ChannelMappedFile::open_in_dir(
+        ipc_directory(),
+        &input_latest_spec(session_id, browser_id),
+        ChannelOpenMode::Create,
+    )
+}
+
+fn input_latest_spec(session_id: &str, browser_id: &str) -> ChannelSpec {
+    ChannelSpec::new(
+        build_browser_channel_name(session_id, browser_id, ChannelKind::Input),
+        ChannelKind::Input,
+        INPUT_LATEST_CAPACITY_BYTES,
+    )
+}
+
+fn open_input_queue(
+    session_id: &str,
+    browser_id: &str,
+) -> Result<MappedSpscQueue, ipc::MappedQueueError> {
+    let directory = ipc_directory();
+    let spec = input_queue_spec(session_id, browser_id);
+    MappedSpscQueue::open_in_dir(&directory, &spec, ChannelOpenMode::OpenExisting)
+        .or_else(|_| MappedSpscQueue::open_in_dir(directory, &spec, ChannelOpenMode::Create))
+}
+
+fn input_queue_spec(session_id: &str, browser_id: &str) -> MappedQueueSpec {
+    let name = format!(
+        "{}_queue",
+        build_browser_channel_name(session_id, browser_id, ChannelKind::Input)
+    );
+    MappedQueueSpec::new(
+        name,
+        ChannelKind::Input,
+        INPUT_QUEUE_ITEM_CAPACITY,
+        INPUT_QUEUE_MAX_PAYLOAD_LEN,
+    )
+}
+
 fn ipc_directory() -> PathBuf {
     std::env::var_os("EBI_IPC_DIR")
         .map(PathBuf::from)
@@ -388,6 +513,15 @@ fn is_valid_browser_id(value: &str) -> bool {
         && value.chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
         })
+}
+
+fn encode_mouse_latest_payload(x: i32, y: i32, buttons: u32, valid: bool) -> [u8; 16] {
+    let mut payload = [0u8; MOUSE_LATEST_PAYLOAD_LEN];
+    payload[0..4].copy_from_slice(&x.to_le_bytes());
+    payload[4..8].copy_from_slice(&y.to_le_bytes());
+    payload[8..12].copy_from_slice(&buttons.to_le_bytes());
+    payload[12] = u8::from(valid);
+    payload
 }
 
 fn input_event_kind_from_u32(kind: u32) -> Option<InputEventKind> {
