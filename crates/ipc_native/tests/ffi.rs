@@ -1,11 +1,12 @@
 use ipc::{
     build_browser_channel_name, build_session_channel_name, ChannelKind, ChannelMappedFile,
-    ChannelOpenMode, ChannelSpec,
+    ChannelOpenMode, ChannelSpec, ControlCommand, MappedQueueSpec, MappedSpscQueue,
 };
 use ipc_native::{
-    ebi_control_send, ebi_error_message, ebi_input_push_event, ebi_input_set_mouse_latest,
-    ebi_output_try_read, ebi_session_close, ebi_session_open, ebi_status_read, EbiSessionHandle,
-    EBI_ERROR_BUFFER_TOO_SMALL, EBI_ERROR_INVALID_ARGUMENT, EBI_ERROR_NOT_IMPLEMENTED, EBI_OK,
+    ebi_control_add_browser, ebi_control_send, ebi_error_message, ebi_input_push_event,
+    ebi_input_set_mouse_latest, ebi_output_try_read, ebi_session_close, ebi_session_open,
+    ebi_status_read, EbiSessionHandle, EBI_ERROR_BUFFER_TOO_SMALL, EBI_ERROR_INVALID_ARGUMENT,
+    EBI_ERROR_NOT_IMPLEMENTED, EBI_ERROR_QUEUE_FULL, EBI_OK,
 };
 use std::ffi::CStr;
 use std::ptr;
@@ -72,7 +73,7 @@ fn session_open_creates_session_control_and_status_channel_files() {
 }
 
 #[test]
-fn control_send_publishes_payload_to_control_channel() {
+fn control_send_enqueues_payload_to_control_queue() {
     let _guard = lock_env();
     let temp = tempfile::tempdir().unwrap();
     std::env::set_var("EBI_IPC_DIR", temp.path());
@@ -89,9 +90,186 @@ fn control_send_publishes_payload_to_control_channel() {
         EBI_OK
     );
 
-    let control_path = temp.path().join("EmbeddedBrowser_session-42_control");
-    let bytes = std::fs::read(control_path).unwrap();
-    assert_eq!(&bytes[68..68 + payload.len()], payload);
+    let mut queue = MappedSpscQueue::open_in_dir(
+        temp.path(),
+        &control_queue_spec(),
+        ChannelOpenMode::OpenExisting,
+    )
+    .unwrap();
+    let item = queue.try_pop().unwrap().expect("control queue item");
+    assert_eq!(item.kind, 0);
+    assert_eq!(item.sequence, 11);
+    assert_eq!(item.payload, payload);
+    assert_eq!(queue.try_pop().unwrap(), None);
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn control_add_browser_encodes_command_on_rust_side_and_enqueues_it() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let browser_id = b"browser-A";
+    let address = b"https://example.test";
+
+    assert_eq!(
+        ebi_control_add_browser(
+            handle,
+            12,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            1280,
+            720,
+            address.as_ptr(),
+            address.len()
+        ),
+        EBI_OK
+    );
+
+    let mut queue = MappedSpscQueue::open_in_dir(
+        temp.path(),
+        &control_queue_spec(),
+        ChannelOpenMode::OpenExisting,
+    )
+    .unwrap();
+    let item = queue.try_pop().unwrap().expect("typed control queue item");
+    assert_eq!(item.kind, 1);
+    assert_eq!(item.sequence, 12);
+    assert_eq!(
+        ControlCommand::decode(&item.payload).unwrap(),
+        ControlCommand::AddBrowser {
+            browser_id: "browser-A".to_string(),
+            width: 1280,
+            height: 720,
+            address: "https://example.test".to_string(),
+        }
+    );
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn control_add_browser_validates_string_arguments() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let browser_id = b"browser-A";
+    let address = b"https://example.test";
+
+    assert_eq!(
+        ebi_control_add_browser(
+            ptr::null_mut(),
+            1,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            1280,
+            720,
+            address.as_ptr(),
+            address.len()
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_add_browser(
+            handle,
+            1,
+            ptr::null(),
+            browser_id.len(),
+            1280,
+            720,
+            address.as_ptr(),
+            address.len()
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_add_browser(
+            handle,
+            1,
+            browser_id.as_ptr(),
+            0,
+            1280,
+            720,
+            address.as_ptr(),
+            address.len()
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_add_browser(
+            handle,
+            1,
+            b"../bad".as_ptr(),
+            b"../bad".len(),
+            1280,
+            720,
+            address.as_ptr(),
+            address.len()
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_add_browser(
+            handle,
+            1,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            1280,
+            720,
+            ptr::null(),
+            address.len()
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_add_browser(
+            handle,
+            1,
+            [0xff, 0xfe].as_ptr(),
+            2,
+            1280,
+            720,
+            address.as_ptr(),
+            address.len()
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn control_send_reports_queue_full_without_overwriting_existing_commands() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let payload = b"command";
+
+    for sequence in 0..256 {
+        assert_eq!(
+            ebi_control_send(handle, sequence, payload.as_ptr(), payload.len()),
+            EBI_OK
+        );
+    }
+
+    assert_eq!(
+        ebi_control_send(handle, 257, payload.as_ptr(), payload.len()),
+        EBI_ERROR_QUEUE_FULL
+    );
+
+    let mut queue = MappedSpscQueue::open_in_dir(
+        temp.path(),
+        &control_queue_spec(),
+        ChannelOpenMode::OpenExisting,
+    )
+    .unwrap();
+    assert_eq!(queue.metadata().dropped_count, 1);
+    assert_eq!(queue.try_pop().unwrap().unwrap().sequence, 0);
     assert_eq!(ebi_session_close(handle), EBI_OK);
     std::env::remove_var("EBI_IPC_DIR");
 }
@@ -452,6 +630,15 @@ fn open_test_session() -> EbiSessionHandle {
         EBI_OK
     );
     handle
+}
+
+fn control_queue_spec() -> MappedQueueSpec {
+    MappedQueueSpec::new(
+        build_session_channel_name("session-42", ChannelKind::Control),
+        ChannelKind::Control,
+        256,
+        16 * 1024,
+    )
 }
 
 fn publish_session_payload(

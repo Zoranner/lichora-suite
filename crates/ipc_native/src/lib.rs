@@ -5,7 +5,8 @@ use std::ptr;
 
 use ipc::{
     build_browser_channel_name, build_session_channel_name, ChannelKind, ChannelMappedFile,
-    ChannelOpenMode, ChannelSpec,
+    ChannelOpenMode, ChannelSpec, ControlCommand, MappedQueueItem, MappedQueueSpec,
+    MappedSpscQueue,
 };
 use ipc::{InputChannelState, InputEvent, InputEventKind, MouseLatest};
 
@@ -17,13 +18,14 @@ pub const EBI_ERROR_INVALID_ARGUMENT: EbiErrorCode = 1;
 pub const EBI_ERROR_NOT_IMPLEMENTED: EbiErrorCode = 2;
 pub const EBI_ERROR_IO: EbiErrorCode = 3;
 pub const EBI_ERROR_BUFFER_TOO_SMALL: EbiErrorCode = 4;
+pub const EBI_ERROR_QUEUE_FULL: EbiErrorCode = 5;
 pub const EBI_ERROR_PANIC: EbiErrorCode = 100;
 
 #[repr(C)]
 pub struct EbiSession {
     session_id: String,
     session_channel: ChannelMappedFile,
-    control_channel: ChannelMappedFile,
+    control_queue: MappedSpscQueue,
     status_channel: ChannelMappedFile,
     input_state: InputChannelState,
 }
@@ -36,6 +38,7 @@ pub extern "C" fn ebi_error_message(code: EbiErrorCode) -> *const c_char {
         EBI_ERROR_NOT_IMPLEMENTED => c"not implemented".as_ptr(),
         EBI_ERROR_IO => c"io error".as_ptr(),
         EBI_ERROR_BUFFER_TOO_SMALL => c"buffer too small".as_ptr(),
+        EBI_ERROR_QUEUE_FULL => c"queue full".as_ptr(),
         EBI_ERROR_PANIC => c"panic".as_ptr(),
         _ => ptr::null(),
     }
@@ -61,8 +64,7 @@ pub extern "C" fn ebi_session_open(
         else {
             return EBI_ERROR_IO;
         };
-        let Ok(control_channel) = open_session_channel(session_id, ChannelKind::Control, 64 * 1024)
-        else {
+        let Ok(control_queue) = open_control_queue(session_id) else {
             return EBI_ERROR_IO;
         };
         let Ok(status_channel) = open_session_channel(session_id, ChannelKind::Status, 64 * 1024)
@@ -73,7 +75,7 @@ pub extern "C" fn ebi_session_open(
         let session = Box::new(EbiSession {
             session_id: session_id.to_owned(),
             session_channel,
-            control_channel,
+            control_queue,
             status_channel,
             input_state: InputChannelState::new(1024),
         });
@@ -113,10 +115,49 @@ pub extern "C" fn ebi_control_send(
 
         let payload = unsafe { std::slice::from_raw_parts(payload_ptr, payload_len) };
         let session = unsafe { &mut *handle };
-        match session.control_channel.publish_latest(sequence, 0, payload) {
-            Ok(()) => EBI_OK,
-            Err(_) => EBI_ERROR_IO,
+        push_control_payload(session, 0, sequence, payload)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn ebi_control_add_browser(
+    handle: EbiSessionHandle,
+    sequence: u64,
+    browser_id_ptr: *const u8,
+    browser_id_len: usize,
+    width: i32,
+    height: i32,
+    address_ptr: *const u8,
+    address_len: usize,
+) -> EbiErrorCode {
+    ffi_boundary(|| {
+        if handle.is_null()
+            || browser_id_ptr.is_null()
+            || browser_id_len == 0
+            || address_ptr.is_null()
+        {
+            return EBI_ERROR_INVALID_ARGUMENT;
         }
+
+        let Some(browser_id) = read_ffi_string(browser_id_ptr, browser_id_len) else {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        };
+        if !is_valid_browser_id(&browser_id) {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+        let Some(address) = read_ffi_string(address_ptr, address_len) else {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        };
+
+        let session = unsafe { &mut *handle };
+        let payload = ControlCommand::AddBrowser {
+            browser_id,
+            width,
+            height,
+            address,
+        }
+        .encode();
+        push_control_payload(session, 1, sequence, &payload)
     })
 }
 
@@ -259,6 +300,23 @@ fn open_session_channel(
     ChannelMappedFile::open_in_dir(ipc_directory(), &spec, ChannelOpenMode::Create)
 }
 
+fn open_control_queue(session_id: &str) -> Result<MappedSpscQueue, ipc::MappedQueueError> {
+    MappedSpscQueue::open_in_dir(
+        ipc_directory(),
+        &control_queue_spec(session_id),
+        ChannelOpenMode::Create,
+    )
+}
+
+fn control_queue_spec(session_id: &str) -> MappedQueueSpec {
+    MappedQueueSpec::new(
+        build_session_channel_name(session_id, ChannelKind::Control),
+        ChannelKind::Control,
+        256,
+        16 * 1024,
+    )
+}
+
 fn ipc_directory() -> PathBuf {
     std::env::var_os("EBI_IPC_DIR")
         .map(PathBuf::from)
@@ -301,6 +359,28 @@ fn copy_payload_to_c_buffer(
     }
 
     EBI_OK
+}
+
+fn push_control_payload(
+    session: &mut EbiSession,
+    kind: u32,
+    sequence: u64,
+    payload: &[u8],
+) -> EbiErrorCode {
+    match session
+        .control_queue
+        .try_push(MappedQueueItem::new(kind, sequence, payload))
+    {
+        Ok(()) => EBI_OK,
+        Err(ipc::MappedQueueError::QueueFull { .. }) => EBI_ERROR_QUEUE_FULL,
+        Err(ipc::MappedQueueError::PayloadTooLarge { .. }) => EBI_ERROR_BUFFER_TOO_SMALL,
+        Err(_) => EBI_ERROR_IO,
+    }
+}
+
+fn read_ffi_string(ptr: *const u8, len: usize) -> Option<String> {
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    std::str::from_utf8(bytes).ok().map(ToOwned::to_owned)
 }
 
 fn is_valid_browser_id(value: &str) -> bool {
