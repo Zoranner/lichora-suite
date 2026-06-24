@@ -5,10 +5,14 @@ use std::path::{Path, PathBuf};
 use memmap2::{MmapMut, MmapOptions};
 use thiserror::Error;
 
+pub mod control;
 pub mod frame;
+pub mod queue;
 pub mod status;
 
+pub use control::{ControlCommand, ControlDecodeError};
 pub use frame::{FramePixelFormat, FramePublishResult, FrameRingState, FrameSlot, FrameType};
+pub use queue::{MappedQueueError, MappedQueueItem, MappedQueueSpec, MappedSpscQueue};
 pub use status::{
     BrowserState, OutputEvent, OutputEventKind, OutputQueueState, ProcessState, StatusCounters,
     StatusSnapshot,
