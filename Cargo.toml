@@ -6,6 +6,10 @@ description = "Headless browser implementation using CEF for Unity integration"
 authors = ["Your Team"]
 license = "MIT"
 
+[workspace]
+members = [".", "crates/ipc", "crates/ipc_native"]
+resolver = "2"
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
