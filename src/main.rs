@@ -3,9 +3,14 @@
 //! This is the standalone executable for testing and production use.
 
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
 use std::time::Duration;
 
-use headless_browser::browser::{shutdown_browser_runtime, BrowserConfig, BrowserEntry};
+use headless_browser::browser::{
+    configure_cef_api_version, shutdown_browser_runtime, BrowserConfig, BrowserEntry,
+};
 use headless_browser::ipc::SharedMemoryWrapper;
 use headless_browser::modules::{HandlerCommand, HeartbeatPayload};
 use log::{error, info, warn};
@@ -13,7 +18,9 @@ use log::{error, info, warn};
 const SINGLE_INSTANCE_LOCK: &str = "com.kimtech.headless-browser";
 
 fn main() {
-    execute_cef_subprocess();
+    if is_cef_subprocess() {
+        execute_cef_subprocess();
+    }
 
     // Initialize logger
     env_logger::Builder::from_default_env()
@@ -46,15 +53,10 @@ fn main() {
 #[cfg(feature = "cef")]
 fn execute_cef_subprocess() {
     use cef::*;
-    use headless_browser::browser::{AppBuilder, HeadlessApp};
 
+    configure_cef_api_version();
     let args = cef::args::Args::new();
-    let app = AppBuilder::build(HeadlessApp::new(false));
-    let exit_code = execute_process(
-        Some(args.as_main_args()),
-        Some(&mut app.clone()),
-        std::ptr::null_mut(),
-    );
+    let exit_code = execute_process(Some(args.as_main_args()), None, std::ptr::null_mut());
     if exit_code >= 0 {
         std::process::exit(exit_code);
     }
@@ -62,6 +64,12 @@ fn execute_cef_subprocess() {
 
 #[cfg(not(feature = "cef"))]
 fn execute_cef_subprocess() {}
+
+fn is_cef_subprocess() -> bool {
+    std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--type" || arg.starts_with("--type="))
+}
 
 fn run_single_browser(config: BrowserConfig) {
     info!("Configuration:");
@@ -101,7 +109,19 @@ fn run_single_browser(config: BrowserConfig) {
 }
 
 fn run_unity_handler_mode(args: CliArgs) {
+    let mut run_log = UnityHandlerRunLog::open(&args.guid);
+    run_log.write_line(&format!(
+        "start args={:?}",
+        std::env::args().collect::<Vec<_>>()
+    ));
     info!("Running Unity handler mode: {}", args.guid);
+    info!("Unity handler log: {}", run_log.path().to_string_lossy());
+    run_log.write_line(&format!(
+        "graphics requested={:?} effective={:?} reason={}",
+        args.graphics_mode.requested_mode,
+        args.graphics_mode.effective_mode,
+        args.graphics_mode.reason
+    ));
     info!(
         "Graphics mode: requested={:?}, effective={:?}, reason={}",
         args.graphics_mode.requested_mode,
@@ -111,12 +131,15 @@ fn run_unity_handler_mode(args: CliArgs) {
     let mut handler = SharedMemoryWrapper::new(&format!("Handler.{}", args.guid), 3000);
     if let Err(error) = handler.initialize() {
         error!("Failed to initialize handler stack: {error}");
+        run_log.write_line(&format!("handler stack initialize failed: {error}"));
         std::process::exit(1);
     }
+    clear_stale_startup_handler_command(&mut handler, &mut run_log);
     let mut heartbeat =
         SharedMemoryWrapper::new(&format!("HEARTBEAT.{}", args.guid), HeartbeatPayload::SIZE);
     if let Err(error) = heartbeat.initialize() {
         error!("Failed to initialize heartbeat stack: {error}");
+        run_log.write_line(&format!("heartbeat stack initialize failed: {error}"));
         std::process::exit(1);
     }
 
@@ -129,13 +152,17 @@ fn run_unity_handler_mode(args: CliArgs) {
         args.heartbeat_options.timeout,
         args.heartbeat_options.stall_grace,
     );
+    let mut exit_reason = HandlerLoopExit::CtrlC;
 
     while running.load(std::sync::atomic::Ordering::SeqCst) {
         let now = started_at.elapsed();
         observe_heartbeat(&heartbeat, &mut watchdog, now);
         let check = watchdog.check(now);
         if check.should_shutdown {
-            warn!("{}", watchdog.format_status(&check));
+            let status = watchdog.format_status(&check);
+            warn!("{status}");
+            run_log.write_line(&format!("exit requested: {status}"));
+            exit_reason = HandlerLoopExit::HeartbeatTimeout(status);
             break;
         }
         if check.scheduler_stalled {
@@ -148,11 +175,24 @@ fn run_unity_handler_mode(args: CliArgs) {
 
         if let Ok(bytes) = handler.read_bytes() {
             if let Some(command) = HandlerCommand::from_bytes(&bytes) {
-                let should_continue =
-                    handle_unity_command(command, &args, &mut browsers, &mut handler);
-                if !should_continue {
+                run_log.write_line(&format!(
+                    "handler command len={} {}",
+                    bytes.len(),
+                    describe_handler_command(&command)
+                ));
+                let action =
+                    handle_unity_command(command, &args, &mut browsers, &mut handler, &mut run_log);
+                if let HandlerLoopAction::Stop(reason) = action {
+                    run_log.write_line(&format!("exit requested: {}", reason.as_str()));
+                    exit_reason = reason;
                     break;
                 }
+            } else if bytes.first().copied() == Some(1) {
+                run_log.write_line(&format!(
+                    "handler command invalid len={}, clearing flag",
+                    bytes.len()
+                ));
+                let _ = handler.clear();
             }
         }
 
@@ -166,6 +206,10 @@ fn run_unity_handler_mode(args: CliArgs) {
         entry.shutdown();
     }
     shutdown_browser_runtime();
+    run_log.write_line(&format!("shutdown complete: {}", exit_reason.as_str()));
+    if exit_reason.is_failure() {
+        std::process::exit(1);
+    }
 }
 
 fn observe_heartbeat(
@@ -187,9 +231,10 @@ fn handle_unity_command(
     args: &CliArgs,
     browsers: &mut HashMap<String, BrowserEntry>,
     handler: &mut SharedMemoryWrapper,
-) -> bool {
-    let should_continue = match command {
-        HandlerCommand::Shutdown => false,
+    run_log: &mut UnityHandlerRunLog,
+) -> HandlerLoopAction {
+    let action = match command {
+        HandlerCommand::Shutdown => HandlerLoopAction::Stop(HandlerLoopExit::ShutdownCommand),
         HandlerCommand::AddBrowser {
             guid,
             width,
@@ -199,31 +244,35 @@ fn handle_unity_command(
             if let Some(entry) = browsers.get_mut(&guid) {
                 entry.load_url(&address);
                 entry.set_size(width, height);
-                return true;
+                HandlerLoopAction::Continue
+            } else {
+                let insert_guid = guid.clone();
+                run_log.write_line(&format!("AddBrowser initialize begin guid={insert_guid}"));
+                let mut entry = BrowserEntry::with_config(BrowserConfig {
+                    width,
+                    height,
+                    url: address,
+                    memory_guid: guid,
+                    device_scale_factor: args.scale,
+                    frame_rate: args.fps,
+                    gpu_enabled: args.graphics_mode.effective_mode == GraphicsMode::On,
+                });
+                if let Err(error) = entry.initialize() {
+                    let message = format!("AddBrowser failed for {insert_guid}: {error}");
+                    error!("{message}");
+                    HandlerLoopAction::Stop(HandlerLoopExit::BrowserInitializeFailed(message))
+                } else {
+                    run_log.write_line(&format!("AddBrowser initialize ok guid={insert_guid}"));
+                    browsers.insert(insert_guid, entry);
+                    HandlerLoopAction::Continue
+                }
             }
-
-            let insert_guid = guid.clone();
-            let mut entry = BrowserEntry::with_config(BrowserConfig {
-                width,
-                height,
-                url: address,
-                memory_guid: guid,
-                device_scale_factor: args.scale,
-                frame_rate: args.fps,
-                gpu_enabled: args.graphics_mode.effective_mode == GraphicsMode::On,
-            });
-            if let Err(error) = entry.initialize() {
-                error!("Failed to initialize browser from Unity command: {error}");
-                return false;
-            }
-            browsers.insert(insert_guid, entry);
-            true
         }
         HandlerCommand::RemoveBrowser { guid } => {
             if let Some(mut entry) = browsers.remove(&guid) {
                 entry.shutdown();
             }
-            true
+            HandlerLoopAction::Continue
         }
         HandlerCommand::ResizeBrowser {
             guid,
@@ -233,11 +282,154 @@ fn handle_unity_command(
             if let Some(entry) = browsers.get_mut(&guid) {
                 entry.set_size(width, height);
             }
-            true
+            HandlerLoopAction::Continue
         }
     };
-    let _ = handler.write_byte_at(0, 0);
-    should_continue
+    let _ = handler.clear();
+    action
+}
+
+fn clear_stale_startup_handler_command(
+    handler: &mut SharedMemoryWrapper,
+    run_log: &mut UnityHandlerRunLog,
+) {
+    let Ok(bytes) = handler.read_bytes() else {
+        return;
+    };
+    if bytes.is_empty() {
+        run_log.write_line("handler stack empty on startup");
+        return;
+    }
+
+    match HandlerCommand::from_bytes(&bytes) {
+        Some(HandlerCommand::Shutdown) => {
+            if let Err(error) = handler.clear() {
+                warn!("Failed to clear stale startup Shutdown command: {error}");
+                run_log.write_line(&format!("stale startup Shutdown clear failed: {error}"));
+            } else {
+                run_log.write_line("stale startup Shutdown command cleared");
+            }
+        }
+        Some(command) => {
+            run_log.write_line(&format!(
+                "startup handler command preserved len={} {}",
+                bytes.len(),
+                describe_handler_command(&command)
+            ));
+        }
+        None if bytes.first().copied() == Some(1) => {
+            if let Err(error) = handler.clear() {
+                warn!("Failed to clear invalid startup handler command: {error}");
+                run_log.write_line(&format!("invalid startup handler clear failed: {error}"));
+            } else {
+                run_log.write_line(&format!(
+                    "invalid startup handler command cleared len={}",
+                    bytes.len()
+                ));
+            }
+        }
+        None => {
+            run_log.write_line(&format!(
+                "startup handler payload ignored len={} first={:?}",
+                bytes.len(),
+                bytes.first()
+            ));
+        }
+    }
+}
+
+#[derive(Debug)]
+enum HandlerLoopAction {
+    Continue,
+    Stop(HandlerLoopExit),
+}
+
+#[derive(Debug)]
+enum HandlerLoopExit {
+    CtrlC,
+    ShutdownCommand,
+    HeartbeatTimeout(String),
+    BrowserInitializeFailed(String),
+}
+
+impl HandlerLoopExit {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::CtrlC => "ctrl-c",
+            Self::ShutdownCommand => "shutdown command",
+            Self::HeartbeatTimeout(message) => message.as_str(),
+            Self::BrowserInitializeFailed(message) => message.as_str(),
+        }
+    }
+
+    fn is_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::HeartbeatTimeout(_) | Self::BrowserInitializeFailed(_)
+        )
+    }
+}
+
+struct UnityHandlerRunLog {
+    path: PathBuf,
+    file: Option<File>,
+}
+
+impl UnityHandlerRunLog {
+    fn open(handler_guid: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("headless_browser-{handler_guid}.log"));
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .ok();
+        let mut result = Self { path, file };
+        result.write_line("--- run ---");
+        result
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    fn write_line(&mut self, message: &str) {
+        let Some(file) = self.file.as_mut() else {
+            return;
+        };
+        let _ = writeln!(file, "{message}");
+        let _ = file.flush();
+    }
+}
+
+fn describe_handler_command(command: &HandlerCommand) -> String {
+    match command {
+        HandlerCommand::Shutdown => "Shutdown".to_string(),
+        HandlerCommand::AddBrowser {
+            guid,
+            width,
+            height,
+            address,
+        } => format!(
+            "AddBrowser guid={guid} size={width}x{height} address={}",
+            truncate_for_log(address, 240)
+        ),
+        HandlerCommand::RemoveBrowser { guid } => format!("RemoveBrowser guid={guid}"),
+        HandlerCommand::ResizeBrowser {
+            guid,
+            width,
+            height,
+        } => format!("ResizeBrowser guid={guid} size={width}x{height}"),
+    }
+}
+
+fn truncate_for_log(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+
+    let mut result = value.chars().take(max_chars).collect::<String>();
+    result.push_str("...");
+    result
 }
 
 /// Command line arguments
@@ -659,50 +851,13 @@ fn detect_gpu_available() -> bool {
 
     #[cfg(target_os = "windows")]
     {
-        detect_windows_gpu_available()
+        true
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         false
     }
-}
-
-#[cfg(target_os = "windows")]
-fn detect_windows_gpu_available() -> bool {
-    std::process::Command::new("reg")
-        .args([
-            "query",
-            r"HKLM\SYSTEM\CurrentControlSet\Control\Video",
-            "/s",
-            "/v",
-            "DriverDesc",
-        ])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|stdout| stdout.lines().any(has_hardware_gpu_name))
-        .unwrap_or(false)
-}
-
-#[cfg(target_os = "windows")]
-fn has_hardware_gpu_name(adapter_name: &str) -> bool {
-    let normalized = adapter_name.to_ascii_lowercase();
-    !normalized.contains("microsoft basic")
-        && !normalized.contains("remote display")
-        && !normalized.contains("vmware")
-        && !normalized.contains("virtualbox")
-        && !normalized.contains("hyper-v")
-        && !normalized.contains("virtio")
-        && !normalized.contains("qxl")
-        && !normalized.contains("citrix")
-        && !normalized.contains("parallels")
-        && (normalized.contains("nvidia")
-            || normalized.contains("amd")
-            || normalized.contains("radeon")
-            || normalized.contains("intel")
-            || normalized.contains("arc"))
 }
 
 struct SingleInstanceLock {

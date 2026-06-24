@@ -34,12 +34,13 @@ dist/win-x64/
 
 ## Unity handler 运行模型
 
-Unity 集成不再按每个浏览器启动一个 `--guid --url` 进程。当前模型是：
+Unity 集成不再按每个浏览器启动一个 `--guid --url` 进程。新主线是 IPC v2 session 模型：
 
-- Unity 启动一个 handler 进程，首个非选项参数为 handler GUID。
-- Browser 进程打开 `Handler.{handlerGuid}`，读取 `AddBrowser`、`RemoveBrowser`、`ResizeBrowser` 和 `Shutdown`。
-- Browser 进程打开 `HEARTBEAT.{handlerGuid}`，通过递增 sequence 判断 Unity 是否仍存活。
-- 每个 browser GUID 派生独立输入、输出和脚本模块共享内存。
+- Unity 启动一个 handler 进程，首个非选项参数为 session 或 handler GUID。
+- Browser 进程创建项目自有 IPC session。
+- 管理命令走 `control` queue，不再使用单槽 flag。
+- 鼠标移动走 latest-only，点击、滚轮、键盘、IME 和脚本请求走 typed input queue。
+- Capture 走 `FrameRing`，状态诊断走 `status` page。
 
 示例：
 
@@ -51,49 +52,23 @@ Unity 集成不再按每个浏览器启动一个 `--guid --url` 进程。当前�
 
 - `src/main.rs`：CLI、handler loop、heartbeat watchdog 和 Unity 管理命令分发。
 - `src/browser/`：CEF app/client、浏览器实例生命周期、OSR render handler。
-- `src/modules/`：共享内存模块协议和各输入输出模块。
-- `src/ipc/`：MemoryStacks 文件映射封装。
+- `src/modules/`：浏览器输入、输出和 capture 的业务适配层。
+- `src/ipc/`：IPC v2 runtime，包括 mmap、header、queue、latest slot、frame ring 和 status page。
+- `src/protocol/`：IPC v2 typed payload、命令、事件和 frame 结构。
 
-文档和发布治理改动不应顺手修改 `src`。协议行为变更必须同时更新 `PROTOCOL.md`。
+文档和发布治理改动不应顺手修改 `src`。协议行为变更必须同时更新 `PROTOCOL.md` 和 `../docs/design/architecture.md`。
 
-## Capture v2 开发约束
+## IPC v2 开发约束
 
-Capture 共享内存不是旧的 `[width, height, pixels]` 单帧布局。当前布局为：
+- 不兼容旧 MemoryStacks payload。
+- 不再使用 `MemoryStacks_` 文件前缀。
+- 不再使用 4 字节大端 length envelope。
+- 不再使用首字节 flag 表示事件可用。
+- 不在业务模块手写 offset；offset 必须封装在 typed protocol 或 IPC runtime 中。
+- 所有跨进程共享结构使用 little-endian。
+- 每个通道必须有 version、channel kind、sequence/ack 或 seqlock 提交语义。
 
-```text
-3 * (2560 * 1440 * 4 byte slot) + 32 byte header
-```
-
-header 字段：
-
-```text
-0   i32 width
-4   i32 height
-8   i32 slot
-12  i32 sequence
-16  i32 frameType，0=full，1=dirty
-20  i32 rectCount
-24  i32 payloadSize
-28  i32 ackSequence
-```
-
-dirty rect payload 中每个矩形使用 16 字节 header：
-
-```text
-x(i32), y(i32), width(i32), height(i32), BGRA pixels
-```
-
-Browser 只有在上一帧 sequence 已由 Unity ack 后才发布 dirty frame；否则必须回退 full frame。尺寸变化、dirty rect 为空、dirty rect 数量超过 64、dirty payload 超槽或 dirty 面积达到整帧 70% 时，也回退 full frame。
-
-## MouseState 开发约束
-
-`MouseState` 是 6 字节连续状态：
-
-```text
-flag(u8), x(i16), y(i16), buttonState(u8)
-```
-
-Browser 端不清 flag、不写 ack。Unity 端可以持续覆盖最新状态；Browser 端负责合并移动事件并按 CEF 输入事件发送。
+Capture 走 `FrameRing`，鼠标移动走 latest-only，事件走 SPSC queue。详细设计见 `../docs/design/architecture.md`。
 
 ## 验证边界
 

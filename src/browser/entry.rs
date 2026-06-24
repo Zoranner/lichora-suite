@@ -27,6 +27,8 @@ use crate::modules::{
 
 #[cfg(feature = "cef")]
 static CEF_RUNTIME_INITIALIZED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "cef")]
+static CEF_API_VERSION_CONFIGURED: AtomicBool = AtomicBool::new(false);
 
 const MAX_WIDTH: i32 = 2560;
 const MAX_HEIGHT: i32 = 1440;
@@ -119,6 +121,8 @@ pub struct BrowserEntry {
     #[cfg(feature = "cef")]
     browser: Option<cef::Browser>,
     #[cfg(feature = "cef")]
+    client: Option<cef::Client>,
+    #[cfg(feature = "cef")]
     browser_slot: Arc<Mutex<Option<cef::Browser>>>,
 
     #[cfg(feature = "cef")]
@@ -165,6 +169,8 @@ impl BrowserEntry {
             #[cfg(feature = "cef")]
             browser: None,
             #[cfg(feature = "cef")]
+            client: None,
+            #[cfg(feature = "cef")]
             browser_slot: Arc::new(Mutex::new(None)),
             #[cfg(feature = "cef")]
             app: None,
@@ -196,15 +202,15 @@ impl BrowserEntry {
         Ok(())
     }
 
-    /// Perform one iteration of the CEF message loop **and** poll all input modules.
+    /// Poll input modules, then perform one iteration of the CEF message loop.
     /// Call this in a tight loop (~10 ms sleep between calls).
     pub fn do_message_loop_work(&mut self) {
         #[cfg(feature = "cef")]
         {
+            self.poll_input();
             cef::do_message_loop_work();
             self.consume_page_loaded_event();
             self.run_repaint_loop();
-            self.poll_input();
         }
     }
 
@@ -432,11 +438,12 @@ impl BrowserEntry {
     fn initialize_cef(&mut self) -> Result<()> {
         use super::{AppBuilder, HeadlessApp};
 
+        configure_cef_api_version();
         if CEF_RUNTIME_INITIALIZED
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            let app = AppBuilder::build(HeadlessApp::new(self.config.gpu_enabled));
+            let mut app = AppBuilder::build(HeadlessApp::new(self.config.gpu_enabled));
             let args = cef::args::Args::new();
             let settings = Settings {
                 windowless_rendering_enabled: true as _,
@@ -449,7 +456,7 @@ impl BrowserEntry {
             let ok = initialize(
                 Some(args.as_main_args()),
                 Some(&settings),
-                Some(&mut app.clone()),
+                Some(&mut app),
                 std::ptr::null_mut(),
             );
             if ok != 1 {
@@ -497,7 +504,7 @@ impl BrowserEntry {
             .as_ref()
             .context("SurroundingText module not initialised before create_browser()")?
             .clone();
-        let client = ClientBuilder::build(
+        let mut client = ClientBuilder::build(
             render_handler.clone(),
             caret_module,
             surrounding_text_module,
@@ -509,7 +516,7 @@ impl BrowserEntry {
 
         let created = cef::browser_host_create_browser(
             Some(&window_info),
-            Some(&mut client.clone()),
+            Some(&mut client),
             Some(&url),
             Some(&browser_settings),
             None,
@@ -530,6 +537,7 @@ impl BrowserEntry {
         self.page_loaded.store(false, Ordering::SeqCst);
         self.loading.store(false, Ordering::SeqCst);
         self.browser = Some(browser);
+        self.client = Some(client);
         self.start_repaint_loop("browser-created", self.config.width, self.config.height);
         Ok(())
     }
@@ -732,6 +740,19 @@ impl Drop for BrowserEntry {
         self.shutdown();
     }
 }
+
+#[cfg(feature = "cef")]
+pub fn configure_cef_api_version() {
+    if CEF_API_VERSION_CONFIGURED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
+    }
+}
+
+#[cfg(not(feature = "cef"))]
+pub fn configure_cef_api_version() {}
 
 #[cfg(feature = "cef")]
 pub fn shutdown_browser_runtime() {

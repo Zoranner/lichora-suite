@@ -371,14 +371,19 @@ impl HeartbeatPayload {
     pub const SIZE: usize = 16;
 
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
-        if data.len() < Self::SIZE {
+        if data.len() != Self::SIZE {
+            return None;
+        }
+
+        let sequence = i64::from_le_bytes([
+            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+        ]);
+        if sequence <= 0 {
             return None;
         }
 
         Some(Self {
-            sequence: i64::from_le_bytes([
-                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
-            ]),
+            sequence,
             utc_ticks: i64::from_le_bytes([
                 data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15],
             ]),
@@ -491,5 +496,12 @@ mod tests {
                 utc_ticks: 638858000000000000,
             }
         );
+    }
+
+    #[test]
+    fn rejects_empty_heartbeat_payload() {
+        let bytes = vec![0; HeartbeatPayload::SIZE];
+
+        assert_eq!(HeartbeatPayload::from_bytes(&bytes), None);
     }
 }

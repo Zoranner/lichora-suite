@@ -1,6 +1,6 @@
 //! Capture Module - Writes rendered frames to shared memory for Unity
 //!
-//! Protocol: [width(4), height(4), pixels(BGRA, width*height*4)]
+//! Protocol: Capture v2 three-slot pixel ring plus a 32-byte commit header.
 //! Direction: Browser → Unity
 //! Max resolution: 3840x2160
 
@@ -109,7 +109,7 @@ impl CaptureModule {
         height: i32,
         pixels: &[u8],
         dirty_rects: &[(i32, i32, i32, i32)],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         ensure!(width > 0 && height > 0, "invalid capture size");
         let pixel_data_size = width as usize * height as usize * BYTES_PER_PIXEL;
         ensure!(
@@ -126,35 +126,41 @@ impl CaptureModule {
         let previous_sequence = self.sequence;
         let slot_offset = next_slot as usize * MAX_PIXEL_BUFFER_SIZE;
         let size_changed = width != self.width || height != self.height;
-        let dirty_payload = build_dirty_payload(width, height, pixels, dirty_rects, size_changed);
 
         let Some(_capture_guard) = self.capture_lock.try_lock() else {
-            return Ok(());
+            return Ok(false);
         };
         let mut shmem = self
             .shmem
             .lock()
             .map_err(|e| anyhow::anyhow!("Mutex poisoned: {}", e))?;
         let ack_sequence = shmem.read_i32_at(CAPTURE_HEADER_OFFSET + 28).unwrap_or(0);
-        let can_write_dirty = previous_sequence > 0
-            && ack_sequence == previous_sequence
-            && dirty_payload
-                .as_ref()
-                .is_some_and(|payload| !payload.rects.is_empty());
-        let (frame_type, rect_count, payload_size) = if can_write_dirty {
-            let payload = dirty_payload.expect("dirty payload should exist");
-            shmem.write_payload_at(slot_offset, &payload.bytes)?;
+        let previous_frame_acked = previous_sequence == 0 || ack_sequence == previous_sequence;
+        if !previous_frame_acked && !size_changed {
+            return Ok(false);
+        }
+
+        let dirty_payload = if previous_frame_acked && previous_sequence > 0 {
+            build_dirty_payload(width, height, pixels, dirty_rects, size_changed)
+        } else {
+            None
+        };
+        let (frame_type, rect_count, payload_size) = if let Some(payload) = dirty_payload
+            .as_ref()
+            .filter(|payload| !payload.rects.is_empty())
+        {
+            shmem.write_payload_at_unflushed(slot_offset, &payload.bytes)?;
             (
                 CAPTURE_FRAME_TYPE_DIRTY,
                 payload.rects.len() as i32,
                 payload.bytes.len() as i32,
             )
         } else {
-            shmem.write_payload_at(slot_offset, pixels)?;
+            shmem.write_payload_at_unflushed(slot_offset, pixels)?;
             (CAPTURE_FRAME_TYPE_FULL, 0, pixel_data_size as i32)
         };
 
-        let mut header = [0u8; CAPTURE_HEADER_SIZE];
+        let mut header = [0u8; CAPTURE_HEADER_SIZE - 4];
         write_i32(&mut header, 0, width);
         write_i32(&mut header, 4, height);
         write_i32(&mut header, 8, next_slot);
@@ -162,18 +168,19 @@ impl CaptureModule {
         write_i32(&mut header, 16, frame_type);
         write_i32(&mut header, 20, rect_count);
         write_i32(&mut header, 24, payload_size);
-        write_i32(&mut header, 28, ack_sequence);
-        shmem.write_payload_at(CAPTURE_HEADER_OFFSET, &header)?;
-        shmem.write_length(Self::capture_v2_size())?;
+        shmem.write_payload_at_unflushed(CAPTURE_HEADER_OFFSET, &header)?;
+        shmem.write_length_unflushed(Self::capture_v2_size())?;
+        shmem.flush_async()?;
         self.slot = next_slot;
         self.sequence = next_sequence;
         self.width = width;
         self.height = height;
-        Ok(())
+        Ok(true)
     }
 
     pub fn write_full_frame(&mut self, width: i32, height: i32, pixels: &[u8]) -> Result<()> {
-        self.write_paint_frame(width, height, pixels, &[])
+        self.write_paint_frame(width, height, pixels, &[])?;
+        Ok(())
     }
 
     /// Update the expected resolution (does not resize shared memory).
@@ -457,25 +464,28 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_full_frame_when_previous_sequence_is_not_acked() {
+    fn drops_same_size_frame_when_previous_sequence_is_not_acked() {
         let name = format!("Capture.{}", uuid::Uuid::new_v4());
         let mut module = CaptureModule::new(&name, 4, 4).unwrap();
         let first = pixels(4, 4);
         module.write_full_frame(4, 4, &first).unwrap();
 
         let second = pixels(4, 4);
-        module
+        let published = module
             .write_paint_frame(4, 4, &second, &[(1, 1, 2, 2)])
             .unwrap();
 
         let payload = read_payload(&name);
         let header_offset = CaptureModule::capture_header_offset();
-        let slot_offset = MAX_PIXEL_BUFFER_SIZE * 2;
-        assert_eq!(read_i32(&payload, header_offset + 12), 2);
+        assert!(!published);
+        assert_eq!(read_i32(&payload, header_offset + 12), 1);
         assert_eq!(read_i32(&payload, header_offset + 16), 0);
         assert_eq!(read_i32(&payload, header_offset + 20), 0);
         assert_eq!(read_i32(&payload, header_offset + 24), 64);
-        assert_eq!(&payload[slot_offset..slot_offset + 64], second.as_slice());
+        assert_eq!(
+            &payload[MAX_PIXEL_BUFFER_SIZE..MAX_PIXEL_BUFFER_SIZE + 64],
+            first.as_slice()
+        );
     }
 
     #[test]
@@ -502,6 +512,28 @@ mod tests {
         let payload = read_payload(&name);
         assert_eq!(read_i32(&payload, header_offset + 16), 0);
         assert_eq!(read_i32(&payload, header_offset + 24), 80);
+    }
+
+    #[test]
+    fn publishes_resized_full_frame_even_when_previous_sequence_is_not_acked() {
+        let name = format!("Capture.{}", uuid::Uuid::new_v4());
+        let mut module = CaptureModule::new(&name, 4, 4).unwrap();
+        module.write_full_frame(4, 4, &pixels(4, 4)).unwrap();
+
+        let resized = pixels(5, 4);
+        let published = module.write_paint_frame(5, 4, &resized, &[]).unwrap();
+
+        let payload = read_payload(&name);
+        let header_offset = CaptureModule::capture_header_offset();
+        let slot_offset = MAX_PIXEL_BUFFER_SIZE * 2;
+        assert!(published);
+        assert_eq!(read_i32(&payload, header_offset), 5);
+        assert_eq!(read_i32(&payload, header_offset + 4), 4);
+        assert_eq!(read_i32(&payload, header_offset + 8), 2);
+        assert_eq!(read_i32(&payload, header_offset + 12), 2);
+        assert_eq!(read_i32(&payload, header_offset + 16), 0);
+        assert_eq!(read_i32(&payload, header_offset + 24), 80);
+        assert_eq!(&payload[slot_offset..slot_offset + 80], resized.as_slice());
     }
 
     #[test]

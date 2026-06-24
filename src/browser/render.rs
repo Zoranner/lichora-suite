@@ -119,11 +119,14 @@ impl OsrRenderHandler {
             dirty_rects.len()
         );
 
-        self.paint_state.record_paint(width, height);
-        self.capture_module
+        let published = self
+            .capture_module
             .lock()
             .map_err(|e| anyhow::anyhow!("Mutex poisoned: {}", e))?
             .write_paint_frame(width, height, pixels, dirty_rects)?;
+        if published {
+            self.paint_state.record_paint(width, height);
+        }
 
         Ok(())
     }

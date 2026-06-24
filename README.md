@@ -2,14 +2,16 @@
 
 Rust/CEF headless browser process for the Unity `EmbeddedBrowser` package.
 
-当前集成方式是 Unity handler 模式：Unity 启动一个 `headless_browser.exe` 进程，并通过 `Handler.{handlerGuid}` 共享内存发送浏览器创建、移除、缩放和关闭命令。每个浏览器实例继续使用独立的模块共享内存，例如 `Capture.{browserGuid}`、`MouseState.{browserGuid}` 和 `KeyEvent.{browserGuid}`。
+当前主线是 IPC v2 重构：Unity 启动一个 `headless_browser.exe` 进程，浏览器实例、输入、渲染帧、输出事件和状态诊断通过 Rust 共享 IPC core 通信。`headless_browser` 直接使用 Rust API，Unity 通过原生插件调用同一个 core；旧 MemoryStacks 单槽 flag 协议不再作为新实现目标。
 
 ## 当前状态
 
 - Windows 目标产物为 `dist/win-x64/headless_browser.exe`。
 - `dist/win-x64` 同时放置 CEF runtime 文件，例如 `libcef.dll`、pak/dat/bin 文件和 `locales/`。
-- Capture 使用 v2 布局：三槽像素缓冲、32 字节 header、dirty rect payload 和 ack sequence 门控。
-- MouseState 固定为 6 字节，由 Unity 连续覆盖，Browser 端不回写 ack。
+- IPC v2 架构、wire format 和实施计划见 `../docs/design/architecture.md`。
+- Capture 将作为 `FrameRing` 一等通道实现，不再是 MemoryStacks 特例。
+- Mouse move 使用 latest-only 状态；点击、滚轮、键盘、IME 和脚本请求使用 typed queue。
+- Status page 是必需通道，用于定位输入积压、丢帧、ack 延迟和进程状态。
 
 ## 项目结构
 
@@ -63,12 +65,7 @@ Unity 侧启动 handler 进程时，第一个非选项参数是 handler GUID：
 .\dist\win-x64\headless_browser.exe 12345678-1234-1234-1234-123456789abc --graphics-mode=auto --heartbeat-timeout-ms=30000
 ```
 
-进程启动后创建：
-
-- `Handler.{handlerGuid}`：Unity 写入管理命令，Browser 读取并清除。
-- `HEARTBEAT.{handlerGuid}`：Unity 周期性写入心跳，Browser watchdog 监控停跳。
-
-浏览器实例由 `Handler` 命令创建。`AddBrowser` 命令携带 browser GUID、宽高和 URL；创建成功后该实例使用 browser GUID 派生各模块共享内存。
+进程启动后创建 IPC v2 session，并通过 `control`、`status`、`input`、`frame` 和 `output` 通道完成浏览器管理、输入、帧发布和诊断。
 
 单 URL 模式仍可用于本地手工调试：
 
@@ -78,23 +75,21 @@ Unity 侧启动 handler 进程时，第一个非选项参数是 handler GUID：
 
 不要把单 URL 模式写成 Unity 集成入口；Unity 集成入口是 handler GUID 模式。
 
-## 共享内存模块
+## IPC v2 通道
 
-| 模块名 | 大小 | 方向 | 用途 |
-| --- | --- | --- | --- |
-| `Handler` | 3000 字节 | Unity -> Browser | handler 管理命令 |
-| `HEARTBEAT` | 16 字节 | Unity -> Browser | handler 存活心跳 |
-| `KeyEvent` | 16 字节 | Unity -> Browser | 键盘输入 |
-| `MouseEvents` | 10 字节 | Unity -> Browser | 鼠标点击和滚轮 |
-| `MouseState` | 6 字节 | Unity -> Browser | 鼠标位置和按钮状态 |
-| `IME` | 2048 字节 | Unity -> Browser | 输入法 |
-| `Caret` | 5 字节 | Browser -> Unity | 光标位置 |
-| `Capture` | `3 * 2560 * 1440 * 4 + 32` 字节 | Browser -> Unity | Capture v2 帧数据 |
-| `Script` | 10005 字节 | Unity -> Browser | JavaScript 执行 |
+| 通道 | 方向 | 用途 |
+| --- | --- | --- |
+| `session` | 双向 | 协议版本、capabilities 和生命周期 |
+| `control` | Unity -> Browser | 页面创建、移除、缩放、关闭和 DevTools |
+| `status` | Browser -> Unity | 进程、输入、帧、错误和 counters |
+| `input` | Unity -> Browser | 鼠标、键盘、IME 和脚本请求 |
+| `frame` | Browser -> Unity | BGRA frame ring 和 dirty rect |
+| `output` | Browser -> Unity | caret、surrounding text、脚本结果和页面事件 |
 
-详细布局见 [PROTOCOL.md](PROTOCOL.md)。
+详细设计见 [Architecture](../docs/design/architecture.md)。`PROTOCOL.md` 后续会随 `crates/ipc` golden tests 改写为 v2 的正式 wire spec。
 
 ## 开发文档
 
 - [DEVELOPMENT.md](DEVELOPMENT.md)
 - [PROTOCOL.md](PROTOCOL.md)
+- [Architecture](../docs/design/architecture.md)

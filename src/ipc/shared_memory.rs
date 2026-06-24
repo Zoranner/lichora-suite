@@ -76,6 +76,12 @@ impl SharedMemoryWrapper {
     }
 
     pub fn write_length(&mut self, length: usize) -> Result<()> {
+        self.write_length_unflushed(length)?;
+        self.flush_async()?;
+        Ok(())
+    }
+
+    pub fn write_length_unflushed(&mut self, length: usize) -> Result<()> {
         let mmap = self
             .mmap
             .as_mut()
@@ -83,11 +89,31 @@ impl SharedMemoryWrapper {
         let max_payload = mmap.len().saturating_sub(std::mem::size_of::<u32>());
         let length = length.min(max_payload);
         mmap[..4].copy_from_slice(&(length as u32).to_be_bytes());
+        Ok(())
+    }
+
+    pub fn clear(&mut self) -> Result<()> {
+        let mmap = self
+            .mmap
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Shared memory not initialized"))?;
+        if mmap.len() >= 4 {
+            mmap[..4].copy_from_slice(&0u32.to_be_bytes());
+        }
+        if mmap.len() > 4 {
+            mmap[4] = 0;
+        }
         mmap.flush_async()?;
         Ok(())
     }
 
     pub fn write_payload_at(&mut self, offset: usize, data: &[u8]) -> Result<()> {
+        self.write_payload_at_unflushed(offset, data)?;
+        self.flush_async()?;
+        Ok(())
+    }
+
+    pub fn write_payload_at_unflushed(&mut self, offset: usize, data: &[u8]) -> Result<()> {
         let mmap = self
             .mmap
             .as_mut()
@@ -100,6 +126,14 @@ impl SharedMemoryWrapper {
             return Err(anyhow::anyhow!("Payload write exceeds shared memory size"));
         }
         mmap[start..end].copy_from_slice(data);
+        Ok(())
+    }
+
+    pub fn flush_async(&mut self) -> Result<()> {
+        let mmap = self
+            .mmap
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Shared memory not initialized"))?;
         mmap.flush_async()?;
         Ok(())
     }
@@ -278,5 +312,31 @@ mod tests {
 
         let payload = stack.read_bytes().unwrap();
         assert_eq!(payload, vec![1, 9, 3, 4]);
+    }
+
+    #[test]
+    fn can_batch_payload_and_length_writes_before_final_flush() {
+        let name = format!("Test.Stack.{}", uuid::Uuid::new_v4());
+        let mut stack = SharedMemoryWrapper::new(&name, 16);
+        stack.initialize().unwrap();
+
+        stack.write_payload_at_unflushed(0, &[5, 6, 7, 8]).unwrap();
+        stack.write_length_unflushed(4).unwrap();
+        stack.flush_async().unwrap();
+
+        assert_eq!(stack.read_bytes().unwrap(), vec![5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn clear_resets_length_header_and_command_flag() {
+        let name = format!("Test.Stack.{}", uuid::Uuid::new_v4());
+        let mut stack = SharedMemoryWrapper::new(&name, 16);
+        stack.initialize().unwrap();
+        stack.write_bytes(&[1, 0, 3, 4]).unwrap();
+
+        stack.clear().unwrap();
+
+        assert_eq!(stack.read_bytes().unwrap(), Vec::<u8>::new());
+        assert_eq!(stack.read_byte_at(0).unwrap(), 0);
     }
 }
