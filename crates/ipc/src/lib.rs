@@ -5,6 +5,15 @@ use std::path::{Path, PathBuf};
 use memmap2::{MmapMut, MmapOptions};
 use thiserror::Error;
 
+pub mod frame;
+pub mod status;
+
+pub use frame::{FramePixelFormat, FramePublishResult, FrameRingState, FrameSlot, FrameType};
+pub use status::{
+    BrowserState, OutputEvent, OutputEventKind, OutputQueueState, ProcessState, StatusCounters,
+    StatusSnapshot,
+};
+
 pub const CHANNEL_MAGIC: u32 = 0x3249_4245;
 pub const PROTOCOL_VERSION_MAJOR: u16 = 2;
 pub const PROTOCOL_VERSION_MINOR: u16 = 0;
