@@ -1,7 +1,11 @@
+use ipc::{
+    build_browser_channel_name, build_session_channel_name, ChannelKind, ChannelMappedFile,
+    ChannelOpenMode, ChannelSpec,
+};
 use ipc_native::{
     ebi_control_send, ebi_error_message, ebi_input_push_event, ebi_input_set_mouse_latest,
-    ebi_session_close, ebi_session_open, EbiSessionHandle, EBI_ERROR_INVALID_ARGUMENT,
-    EBI_ERROR_NOT_IMPLEMENTED, EBI_OK,
+    ebi_output_try_read, ebi_session_close, ebi_session_open, ebi_status_read, EbiSessionHandle,
+    EBI_ERROR_BUFFER_TOO_SMALL, EBI_ERROR_INVALID_ARGUMENT, EBI_ERROR_NOT_IMPLEMENTED, EBI_OK,
 };
 use std::ffi::CStr;
 use std::ptr;
@@ -123,6 +127,297 @@ fn input_push_event_accepts_payload() {
 }
 
 #[test]
+fn status_read_returns_zero_bytes_when_no_status_payload_is_available() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let mut buffer = [0u8; 16];
+    let mut written = usize::MAX;
+
+    assert_eq!(
+        ebi_status_read(handle, buffer.as_mut_ptr(), buffer.len(), &mut written),
+        EBI_OK
+    );
+
+    assert_eq!(written, 0);
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn status_read_copies_latest_status_payload() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    publish_session_payload(
+        temp.path(),
+        "session-42",
+        ChannelKind::Status,
+        4,
+        b"{\"ok\":true}",
+    );
+    let mut buffer = [0u8; 32];
+    let mut written = 0;
+
+    assert_eq!(
+        ebi_status_read(handle, buffer.as_mut_ptr(), buffer.len(), &mut written),
+        EBI_OK
+    );
+
+    assert_eq!(written, b"{\"ok\":true}".len());
+    assert_eq!(&buffer[..written], b"{\"ok\":true}");
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn status_read_reports_required_length_when_buffer_is_too_small() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    publish_session_payload(temp.path(), "session-42", ChannelKind::Status, 4, b"ready");
+    let mut buffer = [0u8; 4];
+    let mut written = 0;
+
+    assert_eq!(
+        ebi_status_read(handle, buffer.as_mut_ptr(), buffer.len(), &mut written),
+        EBI_ERROR_BUFFER_TOO_SMALL
+    );
+
+    assert_eq!(written, b"ready".len());
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn status_read_validates_pointers_and_empty_buffer() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let mut buffer = [0u8; 4];
+    let mut written = 0;
+
+    assert_eq!(
+        ebi_status_read(
+            ptr::null_mut(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_status_read(handle, ptr::null_mut(), buffer.len(), &mut written),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_status_read(handle, buffer.as_mut_ptr(), buffer.len(), ptr::null_mut()),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_status_read(handle, buffer.as_mut_ptr(), 0, &mut written),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn output_try_read_copies_latest_browser_output_payload() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    publish_browser_payload(
+        temp.path(),
+        "session-42",
+        "browser-A",
+        ChannelKind::Output,
+        7,
+        b"console:ready",
+    );
+    let browser_id = b"browser-A";
+    let mut buffer = [0u8; 32];
+    let mut written = 0;
+
+    assert_eq!(
+        ebi_output_try_read(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut written
+        ),
+        EBI_OK
+    );
+
+    assert_eq!(written, b"console:ready".len());
+    assert_eq!(&buffer[..written], b"console:ready");
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn output_try_read_returns_zero_bytes_when_channel_or_payload_is_absent() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let browser_id = b"browser-A";
+    let mut buffer = [0u8; 16];
+    let mut written = usize::MAX;
+
+    assert_eq!(
+        ebi_output_try_read(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut written
+        ),
+        EBI_OK
+    );
+
+    assert_eq!(written, 0);
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn output_try_read_reports_required_length_when_buffer_is_too_small() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    publish_browser_payload(
+        temp.path(),
+        "session-42",
+        "browser-A",
+        ChannelKind::Output,
+        7,
+        b"payload",
+    );
+    let browser_id = b"browser-A";
+    let mut buffer = [0u8; 4];
+    let mut written = 0;
+
+    assert_eq!(
+        ebi_output_try_read(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut written
+        ),
+        EBI_ERROR_BUFFER_TOO_SMALL
+    );
+
+    assert_eq!(written, b"payload".len());
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn output_try_read_validates_pointers_empty_buffer_and_browser_id() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let browser_id = b"browser-A";
+    let mut buffer = [0u8; 4];
+    let mut written = 0;
+
+    assert_eq!(
+        ebi_output_try_read(
+            ptr::null_mut(),
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_output_try_read(
+            handle,
+            ptr::null(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_output_try_read(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            ptr::null_mut(),
+            buffer.len(),
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_output_try_read(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            ptr::null_mut()
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_output_try_read(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            0,
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_output_try_read(
+            handle,
+            browser_id.as_ptr(),
+            0,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_output_try_read(
+            handle,
+            [0xff, 0xfe].as_ptr(),
+            2,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
 fn session_close_accepts_null_as_noop() {
     assert_eq!(ebi_session_close(ptr::null_mut()), EBI_OK);
 }
@@ -144,7 +439,9 @@ fn session_open_rejects_non_utf8_session_id() {
 }
 
 fn lock_env() -> MutexGuard<'static, ()> {
-    ENV_LOCK.lock().expect("env lock")
+    ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn open_test_session() -> EbiSessionHandle {
@@ -155,4 +452,42 @@ fn open_test_session() -> EbiSessionHandle {
         EBI_OK
     );
     handle
+}
+
+fn publish_session_payload(
+    directory: &std::path::Path,
+    session_id: &str,
+    kind: ChannelKind,
+    sequence: u64,
+    payload: &[u8],
+) {
+    let name = build_session_channel_name(session_id, kind);
+    publish_payload(directory, name, kind, sequence, payload);
+}
+
+fn publish_browser_payload(
+    directory: &std::path::Path,
+    session_id: &str,
+    browser_id: &str,
+    kind: ChannelKind,
+    sequence: u64,
+    payload: &[u8],
+) {
+    let name = build_browser_channel_name(session_id, browser_id, kind);
+    publish_payload(directory, name, kind, sequence, payload);
+}
+
+fn publish_payload(
+    directory: &std::path::Path,
+    name: String,
+    kind: ChannelKind,
+    sequence: u64,
+    payload: &[u8],
+) {
+    let spec = ChannelSpec::new(name, kind, 64 * 1024);
+    let mut channel =
+        ChannelMappedFile::open_in_dir(directory, &spec, ChannelOpenMode::OpenExisting)
+            .or_else(|_| ChannelMappedFile::open_in_dir(directory, &spec, ChannelOpenMode::Create))
+            .unwrap();
+    channel.publish_latest(sequence, 0, payload).unwrap();
 }
