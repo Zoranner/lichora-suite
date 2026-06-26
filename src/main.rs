@@ -8,14 +8,14 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use headless_browser::browser::{
-    configure_cef_api_version, shutdown_browser_runtime, BrowserConfig, BrowserEntry,
-};
+use headless_browser::browser::{shutdown_browser_runtime, BrowserConfig, BrowserEntry};
 use headless_browser::ipc::SharedMemoryWrapper;
 use headless_browser::modules::{HandlerCommand, HeartbeatPayload};
 use log::{error, info, warn};
 
 const SINGLE_INSTANCE_LOCK: &str = "com.kimtech.headless-browser";
+const CONTROL_QUEUE_ITEM_CAPACITY: u32 = 256;
+const CONTROL_QUEUE_MAX_PAYLOAD_LEN: u32 = 16 * 1024;
 
 fn main() {
     if is_cef_subprocess() {
@@ -54,7 +54,7 @@ fn main() {
 fn execute_cef_subprocess() {
     use cef::*;
 
-    configure_cef_api_version();
+    headless_browser::browser::configure_cef_api_version();
     let args = cef::args::Args::new();
     let exit_code = execute_process(Some(args.as_main_args()), None, std::ptr::null_mut());
     if exit_code >= 0 {
@@ -142,6 +142,7 @@ fn run_unity_handler_mode(args: CliArgs) {
         run_log.write_line(&format!("heartbeat stack initialize failed: {error}"));
         std::process::exit(1);
     }
+    let mut control_queue = open_control_queue(&args.guid, &mut run_log);
 
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     ctrlc_handler(running.clone());
@@ -171,6 +172,15 @@ fn run_unity_handler_mode(args: CliArgs) {
                 args.guid,
                 check.scheduler_gap.as_millis()
             );
+        }
+
+        if let Some(queue) = control_queue.as_mut() {
+            let action = drain_control_queue(queue, &args, &mut browsers, &mut run_log);
+            if let HandlerLoopAction::Stop(reason) = action {
+                run_log.write_line(&format!("exit requested: {}", reason.as_str()));
+                exit_reason = reason;
+                break;
+            }
         }
 
         if let Ok(bytes) = handler.read_bytes() {
@@ -212,6 +222,136 @@ fn run_unity_handler_mode(args: CliArgs) {
     }
 }
 
+fn open_control_queue(
+    handler_guid: &str,
+    run_log: &mut UnityHandlerRunLog,
+) -> Option<ipc::MappedSpscQueue> {
+    let spec = control_queue_spec(handler_guid);
+    let directory = ipc_directory();
+    match ipc::MappedSpscQueue::open_in_dir(&directory, &spec, ipc::ChannelOpenMode::OpenExisting)
+        .or_else(|_| {
+            ipc::MappedSpscQueue::open_in_dir(&directory, &spec, ipc::ChannelOpenMode::Create)
+        }) {
+        Ok(queue) => {
+            let message = format!(
+                "control queue ready: name={} path={}",
+                spec.name,
+                queue.path().to_string_lossy()
+            );
+            info!("{message}");
+            run_log.write_line(&message);
+            Some(queue)
+        }
+        Err(error) => {
+            warn!(
+                "Failed to open control queue for handler {}: {}. Legacy Handler stack remains active.",
+                handler_guid, error
+            );
+            run_log.write_line(&format!(
+                "control queue unavailable: name={} error={error}",
+                spec.name
+            ));
+            None
+        }
+    }
+}
+
+fn control_queue_spec(handler_guid: &str) -> ipc::MappedQueueSpec {
+    ipc::MappedQueueSpec::new(
+        ipc::build_session_channel_name(handler_guid, ipc::ChannelKind::Control),
+        ipc::ChannelKind::Control,
+        CONTROL_QUEUE_ITEM_CAPACITY,
+        CONTROL_QUEUE_MAX_PAYLOAD_LEN,
+    )
+}
+
+fn ipc_directory() -> PathBuf {
+    std::env::var_os("EBI_IPC_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("EmbeddedBrowserIpc"))
+}
+
+fn drain_control_queue(
+    queue: &mut ipc::MappedSpscQueue,
+    args: &CliArgs,
+    browsers: &mut HashMap<String, BrowserEntry>,
+    run_log: &mut UnityHandlerRunLog,
+) -> HandlerLoopAction {
+    loop {
+        let item = match queue.try_pop() {
+            Ok(Some(item)) => item,
+            Ok(None) => return HandlerLoopAction::Continue,
+            Err(error) => {
+                warn!("Failed to read control queue item: {error}");
+                run_log.write_line(&format!("control queue read failed: {error}"));
+                return HandlerLoopAction::Continue;
+            }
+        };
+
+        let command = match decode_control_queue_payload(&item.payload) {
+            Ok(command) => command,
+            Err(error) => {
+                warn!(
+                    "Invalid control command sequence={} len={}: {}",
+                    item.sequence,
+                    item.payload.len(),
+                    error
+                );
+                run_log.write_line(&format!(
+                    "control command invalid sequence={} len={} error={error}",
+                    item.sequence,
+                    item.payload.len()
+                ));
+                continue;
+            }
+        };
+
+        run_log.write_line(&format!(
+            "control command sequence={} len={} {}",
+            item.sequence,
+            item.payload.len(),
+            describe_handler_command(&command)
+        ));
+        let action = apply_unity_command(command, args, browsers, run_log);
+        if matches!(action, HandlerLoopAction::Stop(_)) {
+            return action;
+        }
+    }
+}
+
+fn decode_control_queue_payload(payload: &[u8]) -> Result<HandlerCommand, ipc::ControlDecodeError> {
+    ipc::ControlCommand::decode(payload).map(control_command_to_handler_command)
+}
+
+fn control_command_to_handler_command(command: ipc::ControlCommand) -> HandlerCommand {
+    match command {
+        ipc::ControlCommand::Shutdown => HandlerCommand::Shutdown,
+        ipc::ControlCommand::AddBrowser {
+            browser_id,
+            width,
+            height,
+            address,
+        } => HandlerCommand::AddBrowser {
+            guid: browser_id,
+            width,
+            height,
+            address,
+        },
+        ipc::ControlCommand::RemoveBrowser { browser_id } => {
+            HandlerCommand::RemoveBrowser { guid: browser_id }
+        }
+        ipc::ControlCommand::ResizeBrowser {
+            browser_id,
+            width,
+            height,
+        } => HandlerCommand::ResizeBrowser {
+            guid: browser_id,
+            width,
+            height,
+        },
+    }
+}
+
 fn observe_heartbeat(
     heartbeat: &SharedMemoryWrapper,
     watchdog: &mut HeartbeatWatchdog,
@@ -233,7 +373,18 @@ fn handle_unity_command(
     handler: &mut SharedMemoryWrapper,
     run_log: &mut UnityHandlerRunLog,
 ) -> HandlerLoopAction {
-    let action = match command {
+    let action = apply_unity_command(command, args, browsers, run_log);
+    let _ = handler.clear();
+    action
+}
+
+fn apply_unity_command(
+    command: HandlerCommand,
+    args: &CliArgs,
+    browsers: &mut HashMap<String, BrowserEntry>,
+    run_log: &mut UnityHandlerRunLog,
+) -> HandlerLoopAction {
+    match command {
         HandlerCommand::Shutdown => HandlerLoopAction::Stop(HandlerLoopExit::ShutdownCommand),
         HandlerCommand::AddBrowser {
             guid,
@@ -248,15 +399,18 @@ fn handle_unity_command(
             } else {
                 let insert_guid = guid.clone();
                 run_log.write_line(&format!("AddBrowser initialize begin guid={insert_guid}"));
-                let mut entry = BrowserEntry::with_config(BrowserConfig {
-                    width,
-                    height,
-                    url: address,
-                    memory_guid: guid,
-                    device_scale_factor: args.scale,
-                    frame_rate: args.fps,
-                    gpu_enabled: args.graphics_mode.effective_mode == GraphicsMode::On,
-                });
+                let mut entry = BrowserEntry::with_session_config(
+                    BrowserConfig {
+                        width,
+                        height,
+                        url: address,
+                        memory_guid: guid,
+                        device_scale_factor: args.scale,
+                        frame_rate: args.fps,
+                        gpu_enabled: args.graphics_mode.effective_mode == GraphicsMode::On,
+                    },
+                    args.guid.clone(),
+                );
                 if let Err(error) = entry.initialize() {
                     let message = format!("AddBrowser failed for {insert_guid}: {error}");
                     error!("{message}");
@@ -284,9 +438,7 @@ fn handle_unity_command(
             }
             HandlerLoopAction::Continue
         }
-    };
-    let _ = handler.clear();
-    action
+    }
 }
 
 fn clear_stale_startup_handler_command(
@@ -1061,5 +1213,68 @@ mod tests {
 
         let expired = watchdog.check(Duration::from_millis(201));
         assert!(expired.should_shutdown);
+    }
+
+    #[test]
+    fn maps_control_commands_to_legacy_handler_commands() {
+        assert_eq!(
+            control_command_to_handler_command(ipc::ControlCommand::Shutdown),
+            HandlerCommand::Shutdown
+        );
+        assert_eq!(
+            control_command_to_handler_command(ipc::ControlCommand::AddBrowser {
+                browser_id: "browser-a".to_string(),
+                width: 1024,
+                height: 768,
+                address: "https://example.test".to_string(),
+            }),
+            HandlerCommand::AddBrowser {
+                guid: "browser-a".to_string(),
+                width: 1024,
+                height: 768,
+                address: "https://example.test".to_string(),
+            }
+        );
+        assert_eq!(
+            control_command_to_handler_command(ipc::ControlCommand::RemoveBrowser {
+                browser_id: "browser-a".to_string(),
+            }),
+            HandlerCommand::RemoveBrowser {
+                guid: "browser-a".to_string(),
+            }
+        );
+        assert_eq!(
+            control_command_to_handler_command(ipc::ControlCommand::ResizeBrowser {
+                browser_id: "browser-a".to_string(),
+                width: 1280,
+                height: 720,
+            }),
+            HandlerCommand::ResizeBrowser {
+                guid: "browser-a".to_string(),
+                width: 1280,
+                height: 720,
+            }
+        );
+    }
+
+    #[test]
+    fn decodes_control_queue_payload_to_handler_command() {
+        let command = ipc::ControlCommand::AddBrowser {
+            browser_id: "browser-b".to_string(),
+            width: 800,
+            height: 600,
+            address: "https://control.example".to_string(),
+        };
+
+        assert_eq!(
+            decode_control_queue_payload(&command.encode()).unwrap(),
+            HandlerCommand::AddBrowser {
+                guid: "browser-b".to_string(),
+                width: 800,
+                height: 600,
+                address: "https://control.example".to_string(),
+            }
+        );
+        assert!(decode_control_queue_payload(b"not a command").is_err());
     }
 }

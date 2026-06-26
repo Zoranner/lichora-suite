@@ -527,6 +527,7 @@ dependencies = [
  "cfg-if",
  "ctrlc",
  "env_logger",
+ "ipc",
  "libc",
  "log",
  "memmap2",

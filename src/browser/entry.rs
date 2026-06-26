@@ -20,7 +20,8 @@ use super::render::OsrRenderHandler;
 #[cfg(feature = "cef")]
 use super::reveal_and_focus_for_linux;
 use crate::modules::{
-    CaptureModule, CaretModule, ImeModule, KeyboardModule, MemoryModuleBase, MouseEventModule,
+    button_flags_to_event_flags, decode_ipc_input_event, CaptureModule, CaretModule, ImeModule,
+    IpcMouseInputEvent, IpcMouseLatest, KeyboardModule, MemoryModuleBase, MouseEventModule,
     MouseStateModule, ScriptModule, SurroundingTextModule, CARET_PROBE_SCRIPT,
     SURROUNDING_TEXT_PROBE_SCRIPT,
 };
@@ -35,6 +36,9 @@ const MAX_HEIGHT: i32 = 1440;
 const REPAINT_MAX_ATTEMPTS: u8 = 12;
 const REPAINT_DELAY: Duration = Duration::from_millis(33);
 const CLOSE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+const INPUT_LATEST_CAPACITY_BYTES: u32 = 64;
+const INPUT_QUEUE_ITEM_CAPACITY: u32 = 1024;
+const INPUT_QUEUE_MAX_PAYLOAD_LEN: u32 = 16 * 1024;
 
 /// Configuration for a browser instance.
 #[derive(Clone)]
@@ -94,6 +98,7 @@ fn detect_gpu_available() -> bool {
 /// Top-level browser manager.
 pub struct BrowserEntry {
     config: BrowserConfig,
+    session_id: String,
     initialized: bool,
     running: bool,
 
@@ -103,6 +108,7 @@ pub struct BrowserEntry {
     surrounding_text_module: Option<Arc<Mutex<SurroundingTextModule>>>,
 
     // Input modules (polled on main thread each tick)
+    browser_input_ipc: Option<BrowserInputIpcChannels>,
     keyboard_module: Option<KeyboardModule>,
     mouse_state_module: Option<MouseStateModule>,
     mouse_event_module: Option<MouseEventModule>,
@@ -140,19 +146,38 @@ struct PendingRepaint {
     next_attempt_at: Instant,
 }
 
+struct BrowserInputIpcChannels {
+    latest: ipc::ChannelMappedFile,
+    queue: ipc::MappedSpscQueue,
+    last_latest_commit: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BrowserInputIpcSpec {
+    latest: ipc::ChannelSpec,
+    queue: ipc::MappedQueueSpec,
+}
+
 impl BrowserEntry {
     pub fn new() -> Self {
         Self::with_config(BrowserConfig::default())
     }
 
     pub fn with_config(config: BrowserConfig) -> Self {
+        let session_id = config.memory_guid.clone();
+        Self::with_session_config(config, session_id)
+    }
+
+    pub fn with_session_config(config: BrowserConfig, session_id: String) -> Self {
         Self {
+            session_id,
             config,
             initialized: false,
             running: false,
             capture_module: None,
             caret_module: None,
             surrounding_text_module: None,
+            browser_input_ipc: None,
             keyboard_module: None,
             mouse_state_module: None,
             mouse_event_module: None,
@@ -246,6 +271,7 @@ impl BrowserEntry {
         self.running = false;
         self.repaint_loop_id = self.repaint_loop_id.wrapping_add(1);
         self.pending_repaint = None;
+        self.browser_input_ipc = None;
 
         // Shutdown input modules
         if let Some(mut m) = self.keyboard_module.take() {
@@ -396,11 +422,18 @@ impl BrowserEntry {
 
     fn initialize_modules(&mut self) -> Result<()> {
         let guid = self.config.memory_guid.clone();
+        let session_id = self.session_id.clone();
         let w = self.config.width;
         let h = self.config.height;
 
         // Output modules — share their shmem Arcs with the render handler.
-        let capture = CaptureModule::new_shared(&format!("Capture.{}", guid), w, h)?;
+        let capture = CaptureModule::new_shared_with_frame_channel(
+            &format!("Capture.{}", guid),
+            &session_id,
+            &guid,
+            w,
+            h,
+        )?;
         self.capture_module = Some(capture.clone());
 
         let caret = CaretModule::new(&format!("Caret.{}", guid))?;
@@ -415,6 +448,18 @@ impl BrowserEntry {
         self.surrounding_text_module = Some(surrounding_text);
 
         // Input modules — each owns its own shmem.
+        match BrowserInputIpcChannels::open_or_create(&session_id, &guid) {
+            Ok(channels) => {
+                self.browser_input_ipc = Some(channels);
+            }
+            Err(error) => {
+                warn!(
+                    "Failed to open IPC v2 browser input channels for browser {}: {}. Legacy MouseState/MouseEvents fallback remains active.",
+                    guid, error
+                );
+                self.browser_input_ipc = None;
+            }
+        }
         self.keyboard_module = Some(KeyboardModule::new(&format!("KeyEvent.{}", guid))?);
         self.mouse_state_module = Some(MouseStateModule::new(&format!("MouseState.{}", guid))?);
         self.mouse_event_module = Some(MouseEventModule::new(&format!("MouseEvents.{}", guid))?);
@@ -673,11 +718,17 @@ impl BrowserEntry {
         if let Some(ref mut m) = self.keyboard_module {
             should_probe |= m.poll(&host);
         }
-        if let Some(ref mut m) = self.mouse_event_module {
-            should_probe |= m.poll(&host);
+        let mut used_ipc_input = false;
+        if let Some(ref mut input) = self.browser_input_ipc {
+            used_ipc_input = input.poll(&host);
         }
-        if let Some(ref mut m) = self.mouse_state_module {
-            m.poll(&host);
+        if !used_ipc_input {
+            if let Some(ref mut m) = self.mouse_event_module {
+                should_probe |= m.poll(&host);
+            }
+            if let Some(ref mut m) = self.mouse_state_module {
+                m.poll(&host);
+            }
         }
         if let (Some(ref mut ime), Some(ref keyboard)) =
             (&mut self.ime_module, &self.keyboard_module)
@@ -713,6 +764,184 @@ impl BrowserEntry {
         }
         ScriptModule::execute_script(browser, CARET_PROBE_SCRIPT);
         ScriptModule::execute_script(browser, SURROUNDING_TEXT_PROBE_SCRIPT);
+    }
+}
+
+impl BrowserInputIpcChannels {
+    fn open_or_create(session_id: &str, browser_id: &str) -> Result<Self> {
+        let spec = browser_input_ipc_spec(session_id, browser_id);
+        let directory = ipc_directory();
+        let latest = ipc::ChannelMappedFile::open_in_dir(
+            &directory,
+            &spec.latest,
+            ipc::ChannelOpenMode::OpenExisting,
+        )
+        .or_else(|_| {
+            ipc::ChannelMappedFile::open_in_dir(
+                &directory,
+                &spec.latest,
+                ipc::ChannelOpenMode::Create,
+            )
+        })?;
+        let queue = ipc::MappedSpscQueue::open_in_dir(
+            &directory,
+            &spec.queue,
+            ipc::ChannelOpenMode::OpenExisting,
+        )
+        .or_else(|_| {
+            ipc::MappedSpscQueue::open_in_dir(&directory, &spec.queue, ipc::ChannelOpenMode::Create)
+        })?;
+
+        Ok(Self {
+            latest,
+            queue,
+            last_latest_commit: None,
+        })
+    }
+
+    #[cfg(feature = "cef")]
+    fn poll(&mut self, host: &cef::BrowserHost) -> bool {
+        let mut consumed_input = false;
+
+        match self.latest.try_read_latest() {
+            Ok(Some(snapshot)) => {
+                if self.last_latest_commit != Some(snapshot.header.header_commit) {
+                    self.last_latest_commit = Some(snapshot.header.header_commit);
+                    if !snapshot.payload.is_empty() {
+                        match IpcMouseLatest::decode(&snapshot.payload) {
+                            Some(latest) if latest.valid => {
+                                send_ipc_mouse_move(host, latest);
+                                consumed_input = true;
+                            }
+                            Some(_) => {}
+                            None => warn!(
+                                "Invalid IPC v2 mouse latest payload len={}, dropping",
+                                snapshot.payload.len()
+                            ),
+                        }
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(error) => warn!("Failed to read IPC v2 mouse latest channel: {error}"),
+        }
+
+        loop {
+            let item = match self.queue.try_pop() {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(error) => {
+                    warn!("Failed to read IPC v2 input queue item: {error}");
+                    break;
+                }
+            };
+
+            let Some(event) = decode_ipc_input_event(item.kind, &item.payload) else {
+                warn!(
+                    "Invalid IPC v2 input queue item kind={} sequence={} len={}, dropping",
+                    item.kind,
+                    item.sequence,
+                    item.payload.len()
+                );
+                continue;
+            };
+
+            send_ipc_mouse_event(host, event);
+            consumed_input = true;
+        }
+
+        consumed_input
+    }
+}
+
+fn browser_input_ipc_spec(session_id: &str, browser_id: &str) -> BrowserInputIpcSpec {
+    let latest_name =
+        ipc::build_browser_channel_name(session_id, browser_id, ipc::ChannelKind::Input);
+    BrowserInputIpcSpec {
+        latest: ipc::ChannelSpec::new(
+            latest_name.clone(),
+            ipc::ChannelKind::Input,
+            INPUT_LATEST_CAPACITY_BYTES,
+        ),
+        queue: ipc::MappedQueueSpec::new(
+            format!("{latest_name}_queue"),
+            ipc::ChannelKind::Input,
+            INPUT_QUEUE_ITEM_CAPACITY,
+            INPUT_QUEUE_MAX_PAYLOAD_LEN,
+        ),
+    }
+}
+
+fn ipc_directory() -> std::path::PathBuf {
+    std::env::var_os("EBI_IPC_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("EmbeddedBrowserIpc"))
+}
+
+#[cfg(feature = "cef")]
+fn send_ipc_mouse_move(host: &cef::BrowserHost, latest: IpcMouseLatest) {
+    use cef::{ImplBrowserHost, MouseEvent as CefMouseEvent};
+
+    let mouse_ev = CefMouseEvent {
+        x: latest.x,
+        y: latest.y,
+        modifiers: button_flags_to_event_flags(latest.buttons),
+    };
+    host.set_focus(1);
+    host.send_mouse_move_event(Some(&mouse_ev), 0);
+}
+
+#[cfg(feature = "cef")]
+fn send_ipc_mouse_event(host: &cef::BrowserHost, event: IpcMouseInputEvent) {
+    use cef::{ImplBrowserHost, MouseButtonType, MouseEvent as CefMouseEvent};
+
+    match event {
+        IpcMouseInputEvent::Wheel(event) => {
+            let mouse_ev = CefMouseEvent {
+                x: event.x,
+                y: event.y,
+                modifiers: button_flags_to_event_flags(event.buttons),
+            };
+            host.send_mouse_wheel_event(Some(&mouse_ev), event.delta_x, event.delta_y);
+        }
+        IpcMouseInputEvent::Button(event) => {
+            let mouse_ev = CefMouseEvent {
+                x: event.x,
+                y: event.y,
+                modifiers: button_flags_to_event_flags(event.buttons),
+            };
+            let (button, mouse_up) = match event.event_type {
+                x if x == crate::modules::MouseEventType::LeftDown as u8 => {
+                    (MouseButtonType::LEFT, 0)
+                }
+                x if x == crate::modules::MouseEventType::LeftUp as u8 => {
+                    (MouseButtonType::LEFT, 1)
+                }
+                x if x == crate::modules::MouseEventType::RightDown as u8 => {
+                    (MouseButtonType::RIGHT, 0)
+                }
+                x if x == crate::modules::MouseEventType::RightUp as u8 => {
+                    (MouseButtonType::RIGHT, 1)
+                }
+                x if x == crate::modules::MouseEventType::MiddleDown as u8 => {
+                    (MouseButtonType::MIDDLE, 0)
+                }
+                x if x == crate::modules::MouseEventType::MiddleUp as u8 => {
+                    (MouseButtonType::MIDDLE, 1)
+                }
+                other => {
+                    warn!("Unknown IPC v2 mouse button event type: {}", other);
+                    return;
+                }
+            };
+
+            if cfg!(target_os = "linux")
+                && event.event_type == crate::modules::MouseEventType::LeftDown as u8
+            {
+                host.set_focus(1);
+            }
+            host.send_mouse_click_event(Some(&mouse_ev), button, mouse_up, 1);
+        }
     }
 }
 
@@ -763,3 +992,30 @@ pub fn shutdown_browser_runtime() {
 
 #[cfg(not(feature = "cef"))]
 pub fn shutdown_browser_runtime() {}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        browser_input_ipc_spec, INPUT_LATEST_CAPACITY_BYTES, INPUT_QUEUE_ITEM_CAPACITY,
+        INPUT_QUEUE_MAX_PAYLOAD_LEN,
+    };
+
+    #[test]
+    fn browser_input_ipc_spec_matches_ipc_native_names_and_layout() {
+        let spec = browser_input_ipc_spec("session-42", "browser-A");
+
+        assert_eq!(
+            "EmbeddedBrowser_session-42_browser-A_input",
+            spec.latest.name
+        );
+        assert_eq!(ipc::ChannelKind::Input, spec.latest.channel_kind);
+        assert_eq!(INPUT_LATEST_CAPACITY_BYTES, spec.latest.capacity_bytes);
+        assert_eq!(
+            "EmbeddedBrowser_session-42_browser-A_input_queue",
+            spec.queue.name
+        );
+        assert_eq!(ipc::ChannelKind::Input, spec.queue.channel_kind);
+        assert_eq!(INPUT_QUEUE_ITEM_CAPACITY, spec.queue.item_capacity);
+        assert_eq!(INPUT_QUEUE_MAX_PAYLOAD_LEN, spec.queue.max_payload_len);
+    }
+}

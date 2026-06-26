@@ -8,6 +8,7 @@ use ipc::{
     ChannelOpenMode, ChannelSpec, ControlCommand, MappedQueueItem, MappedQueueSpec,
     MappedSpscQueue,
 };
+use ipc::{FrameChannel, FrameChannelSpec, FrameCopyError};
 use ipc::{InputChannelState, InputEvent, InputEventKind, MouseLatest};
 
 pub type EbiErrorCode = i32;
@@ -25,6 +26,8 @@ const INPUT_LATEST_CAPACITY_BYTES: u32 = 64;
 const INPUT_QUEUE_ITEM_CAPACITY: u32 = 1024;
 const INPUT_QUEUE_MAX_PAYLOAD_LEN: u32 = 16 * 1024;
 const MOUSE_LATEST_PAYLOAD_LEN: usize = 16;
+const FRAME_SLOT_COUNT: u32 = 2;
+const FRAME_SLOT_SIZE: u32 = 64 * 1024 * 1024;
 
 #[repr(C)]
 pub struct EbiSession {
@@ -162,6 +165,76 @@ pub extern "C" fn ebi_control_add_browser(
             address,
         }
         .encode();
+        push_control_payload(session, 1, sequence, &payload)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn ebi_control_remove_browser(
+    handle: EbiSessionHandle,
+    sequence: u64,
+    browser_id_ptr: *const u8,
+    browser_id_len: usize,
+) -> EbiErrorCode {
+    ffi_boundary(|| {
+        if handle.is_null() || browser_id_ptr.is_null() || browser_id_len == 0 {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let Some(browser_id) = read_ffi_string(browser_id_ptr, browser_id_len) else {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        };
+        if !is_valid_browser_id(&browser_id) {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let session = unsafe { &mut *handle };
+        let payload = ControlCommand::RemoveBrowser { browser_id }.encode();
+        push_control_payload(session, 1, sequence, &payload)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn ebi_control_resize_browser(
+    handle: EbiSessionHandle,
+    sequence: u64,
+    browser_id_ptr: *const u8,
+    browser_id_len: usize,
+    width: i32,
+    height: i32,
+) -> EbiErrorCode {
+    ffi_boundary(|| {
+        if handle.is_null() || browser_id_ptr.is_null() || browser_id_len == 0 {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let Some(browser_id) = read_ffi_string(browser_id_ptr, browser_id_len) else {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        };
+        if !is_valid_browser_id(&browser_id) {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let session = unsafe { &mut *handle };
+        let payload = ControlCommand::ResizeBrowser {
+            browser_id,
+            width,
+            height,
+        }
+        .encode();
+        push_control_payload(session, 1, sequence, &payload)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn ebi_control_shutdown(handle: EbiSessionHandle, sequence: u64) -> EbiErrorCode {
+    ffi_boundary(|| {
+        if handle.is_null() {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let session = unsafe { &mut *handle };
+        let payload = ControlCommand::Shutdown.encode();
         push_control_payload(session, 1, sequence, &payload)
     })
 }
@@ -369,6 +442,111 @@ pub extern "C" fn ebi_output_try_read(
     })
 }
 
+#[no_mangle]
+pub extern "C" fn ebi_frame_try_copy_latest(
+    handle: EbiSessionHandle,
+    browser_id_ptr: *const u8,
+    browser_id_len: usize,
+    buffer_ptr: *mut u8,
+    buffer_len: usize,
+    width_ptr: *mut i32,
+    height_ptr: *mut i32,
+    sequence_ptr: *mut u64,
+    written_ptr: *mut usize,
+) -> EbiErrorCode {
+    ffi_boundary(|| {
+        if handle.is_null()
+            || browser_id_ptr.is_null()
+            || browser_id_len == 0
+            || buffer_ptr.is_null()
+            || buffer_len == 0
+            || width_ptr.is_null()
+            || height_ptr.is_null()
+            || sequence_ptr.is_null()
+            || written_ptr.is_null()
+        {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let Some(browser_id) = read_ffi_string(browser_id_ptr, browser_id_len) else {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        };
+        if !is_valid_browser_id(&browser_id) {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let session = unsafe { &mut *handle };
+        match open_frame_channel_if_exists(&session.session_id, &browser_id) {
+            Ok(Some(mut channel)) => {
+                let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
+                match channel.try_copy_latest(buffer) {
+                    Ok(result) => {
+                        unsafe {
+                            *width_ptr = result.width;
+                            *height_ptr = result.height;
+                            *sequence_ptr = result.sequence;
+                            *written_ptr = result.written;
+                        }
+                        EBI_OK
+                    }
+                    Err(FrameCopyError::BufferTooSmall { required }) => {
+                        let frame_header = channel.frame_header();
+                        unsafe {
+                            *width_ptr = frame_header.width;
+                            *height_ptr = frame_header.height;
+                            *sequence_ptr = frame_header.frame_sequence;
+                            *written_ptr = required;
+                        }
+                        EBI_ERROR_BUFFER_TOO_SMALL
+                    }
+                    Err(_) => EBI_ERROR_IO,
+                }
+            }
+            Ok(None) => {
+                unsafe {
+                    *width_ptr = 0;
+                    *height_ptr = 0;
+                    *sequence_ptr = 0;
+                    *written_ptr = 0;
+                }
+                EBI_OK
+            }
+            Err(_) => EBI_ERROR_IO,
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn ebi_frame_ack(
+    handle: EbiSessionHandle,
+    browser_id_ptr: *const u8,
+    browser_id_len: usize,
+    sequence: u64,
+) -> EbiErrorCode {
+    ffi_boundary(|| {
+        if handle.is_null() || browser_id_ptr.is_null() || browser_id_len == 0 {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let Some(browser_id) = read_ffi_string(browser_id_ptr, browser_id_len) else {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        };
+        if !is_valid_browser_id(&browser_id) {
+            return EBI_ERROR_INVALID_ARGUMENT;
+        }
+
+        let session = unsafe { &mut *handle };
+        match open_frame_channel_if_exists(&session.session_id, &browser_id) {
+            Ok(Some(mut channel)) => match channel.ack(sequence) {
+                Ok(()) => EBI_OK,
+                Err(_) => EBI_ERROR_IO,
+            },
+            Ok(None) => EBI_OK,
+            Err(_) => EBI_ERROR_IO,
+        }
+    })
+}
+
 fn ffi_boundary(call: impl FnOnce() -> EbiErrorCode) -> EbiErrorCode {
     catch_unwind(AssertUnwindSafe(call)).unwrap_or(EBI_ERROR_PANIC)
 }
@@ -380,15 +558,14 @@ fn open_session_channel(
 ) -> Result<ChannelMappedFile, ipc::IpcError> {
     let name = build_session_channel_name(session_id, channel_kind);
     let spec = ChannelSpec::new(name, channel_kind, capacity_bytes);
-    ChannelMappedFile::open_in_dir(ipc_directory(), &spec, ChannelOpenMode::Create)
+    open_or_create_session_channel(&spec)
 }
 
 fn open_control_queue(session_id: &str) -> Result<MappedSpscQueue, ipc::MappedQueueError> {
-    MappedSpscQueue::open_in_dir(
-        ipc_directory(),
-        &control_queue_spec(session_id),
-        ChannelOpenMode::Create,
-    )
+    let directory = ipc_directory();
+    let spec = control_queue_spec(session_id);
+    MappedSpscQueue::open_in_dir(&directory, &spec, ChannelOpenMode::OpenExisting)
+        .or_else(|_| MappedSpscQueue::open_in_dir(directory, &spec, ChannelOpenMode::Create))
 }
 
 fn control_queue_spec(session_id: &str) -> MappedQueueSpec {
@@ -404,11 +581,10 @@ fn open_input_latest_channel(
     session_id: &str,
     browser_id: &str,
 ) -> Result<ChannelMappedFile, ipc::IpcError> {
-    ChannelMappedFile::open_in_dir(
-        ipc_directory(),
-        &input_latest_spec(session_id, browser_id),
-        ChannelOpenMode::Create,
-    )
+    let directory = ipc_directory();
+    let spec = input_latest_spec(session_id, browser_id);
+    ChannelMappedFile::open_in_dir(&directory, &spec, ChannelOpenMode::OpenExisting)
+        .or_else(|_| ChannelMappedFile::open_in_dir(directory, &spec, ChannelOpenMode::Create))
 }
 
 fn input_latest_spec(session_id: &str, browser_id: &str) -> ChannelSpec {
@@ -462,6 +638,34 @@ fn read_output_latest(
     let mut channel =
         ChannelMappedFile::open_in_dir(ipc_directory(), &spec, ChannelOpenMode::OpenExisting)?;
     channel.try_read_latest()
+}
+
+fn open_or_create_session_channel(spec: &ChannelSpec) -> Result<ChannelMappedFile, ipc::IpcError> {
+    let directory = ipc_directory();
+    ChannelMappedFile::open_in_dir(&directory, spec, ChannelOpenMode::OpenExisting)
+        .or_else(|_| ChannelMappedFile::open_in_dir(directory, spec, ChannelOpenMode::Create))
+}
+
+fn open_frame_channel_if_exists(
+    session_id: &str,
+    browser_id: &str,
+) -> Result<Option<FrameChannel>, FrameCopyError> {
+    let directory = ipc_directory();
+    let spec = frame_spec(session_id, browser_id);
+    let path = directory.join(&spec.name);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    FrameChannel::open_in_dir(directory, &spec, ChannelOpenMode::OpenExisting).map(Some)
+}
+
+fn frame_spec(session_id: &str, browser_id: &str) -> FrameChannelSpec {
+    FrameChannelSpec::new(
+        build_browser_channel_name(session_id, browser_id, ChannelKind::Frame),
+        FRAME_SLOT_COUNT,
+        FRAME_SLOT_SIZE,
+    )
 }
 
 fn copy_payload_to_c_buffer(

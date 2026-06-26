@@ -10,6 +10,32 @@ use super::base::MemoryModuleBase;
 use super::protocol::{MouseEvent, MouseEventType};
 use crate::ipc::SharedMemoryWrapper;
 
+pub(crate) const IPC_INPUT_KIND_MOUSE_BUTTON: u32 = 1;
+pub(crate) const IPC_INPUT_KIND_MOUSE_WHEEL: u32 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IpcMouseButtonEvent {
+    pub event_type: u8,
+    pub x: i32,
+    pub y: i32,
+    pub buttons: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IpcMouseWheelEvent {
+    pub x: i32,
+    pub y: i32,
+    pub delta_x: i32,
+    pub delta_y: i32,
+    pub buttons: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IpcMouseInputEvent {
+    Button(IpcMouseButtonEvent),
+    Wheel(IpcMouseWheelEvent),
+}
+
 /// Mouse event module (click + scroll queue)
 pub struct MouseEventModule {
     memory_name: String,
@@ -92,6 +118,45 @@ impl MouseEventModule {
     }
 }
 
+pub(crate) fn decode_ipc_input_event(kind: u32, payload: &[u8]) -> Option<IpcMouseInputEvent> {
+    match kind {
+        IPC_INPUT_KIND_MOUSE_BUTTON => {
+            decode_ipc_mouse_button_event(payload).map(IpcMouseInputEvent::Button)
+        }
+        IPC_INPUT_KIND_MOUSE_WHEEL => {
+            decode_ipc_mouse_wheel_event(payload).map(IpcMouseInputEvent::Wheel)
+        }
+        _ => None,
+    }
+}
+
+fn decode_ipc_mouse_button_event(payload: &[u8]) -> Option<IpcMouseButtonEvent> {
+    if payload.len() < 13 {
+        return None;
+    }
+
+    Some(IpcMouseButtonEvent {
+        event_type: payload[0],
+        x: i32::from_le_bytes(payload[1..5].try_into().ok()?),
+        y: i32::from_le_bytes(payload[5..9].try_into().ok()?),
+        buttons: u32::from_le_bytes(payload[9..13].try_into().ok()?),
+    })
+}
+
+fn decode_ipc_mouse_wheel_event(payload: &[u8]) -> Option<IpcMouseWheelEvent> {
+    if payload.len() < 20 {
+        return None;
+    }
+
+    Some(IpcMouseWheelEvent {
+        x: i32::from_le_bytes(payload[0..4].try_into().ok()?),
+        y: i32::from_le_bytes(payload[4..8].try_into().ok()?),
+        delta_x: i32::from_le_bytes(payload[8..12].try_into().ok()?),
+        delta_y: i32::from_le_bytes(payload[12..16].try_into().ok()?),
+        buttons: u32::from_le_bytes(payload[16..20].try_into().ok()?),
+    })
+}
+
 impl MemoryModuleBase for MouseEventModule {
     fn get_memory_name(&self) -> &str {
         &self.memory_name
@@ -104,5 +169,59 @@ impl MemoryModuleBase for MouseEventModule {
     }
     fn is_running(&self) -> bool {
         self.running
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        decode_ipc_input_event, IpcMouseButtonEvent, IpcMouseInputEvent, IpcMouseWheelEvent,
+    };
+    use crate::modules::protocol::MouseEventType;
+
+    #[test]
+    fn decodes_ipc_v2_mouse_button_payload() {
+        let mut payload = Vec::new();
+        payload.push(MouseEventType::LeftDown as u8);
+        payload.extend_from_slice(&10i32.to_le_bytes());
+        payload.extend_from_slice(&20i32.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+
+        let event = decode_ipc_input_event(1, &payload).unwrap();
+
+        assert_eq!(
+            IpcMouseInputEvent::Button(IpcMouseButtonEvent {
+                event_type: MouseEventType::LeftDown as u8,
+                x: 10,
+                y: 20,
+                buttons: 1,
+            }),
+            event
+        );
+        assert!(decode_ipc_input_event(1, &payload[..8]).is_none());
+    }
+
+    #[test]
+    fn decodes_ipc_v2_mouse_wheel_payload() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&10i32.to_le_bytes());
+        payload.extend_from_slice(&20i32.to_le_bytes());
+        payload.extend_from_slice(&(-3i32).to_le_bytes());
+        payload.extend_from_slice(&120i32.to_le_bytes());
+        payload.extend_from_slice(&2u32.to_le_bytes());
+
+        let event = decode_ipc_input_event(2, &payload).unwrap();
+
+        assert_eq!(
+            IpcMouseInputEvent::Wheel(IpcMouseWheelEvent {
+                x: 10,
+                y: 20,
+                delta_x: -3,
+                delta_y: 120,
+                buttons: 2,
+            }),
+            event
+        );
+        assert!(decode_ipc_input_event(2, &payload[..16]).is_none());
     }
 }

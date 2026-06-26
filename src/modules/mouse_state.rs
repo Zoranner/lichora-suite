@@ -22,6 +22,31 @@ struct MouseMoveSnapshot {
     buttons: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IpcMouseLatest {
+    pub x: i32,
+    pub y: i32,
+    pub buttons: u32,
+    pub valid: bool,
+}
+
+impl IpcMouseLatest {
+    pub const SIZE: usize = 16;
+
+    pub(crate) fn decode(payload: &[u8]) -> Option<Self> {
+        if payload.len() < Self::SIZE {
+            return None;
+        }
+
+        Some(Self {
+            x: i32::from_le_bytes(payload[0..4].try_into().ok()?),
+            y: i32::from_le_bytes(payload[4..8].try_into().ok()?),
+            buttons: u32::from_le_bytes(payload[8..12].try_into().ok()?),
+            valid: payload[12] != 0,
+        })
+    }
+}
+
 #[derive(Debug, Default)]
 struct MouseMoveCoalescer {
     latest: Option<MouseMoveSnapshot>,
@@ -133,14 +158,18 @@ impl MouseStateModule {
 }
 
 fn button_state_to_event_flags(button_state: u8) -> u32 {
+    button_flags_to_event_flags(u32::from(button_state))
+}
+
+pub(crate) fn button_flags_to_event_flags(button_state: u32) -> u32 {
     let mut modifiers: u32 = 0;
-    if button_state & MouseState::BUTTON_LEFT != 0 {
+    if button_state & u32::from(MouseState::BUTTON_LEFT) != 0 {
         modifiers |= EVENTFLAG_LEFT_MOUSE_BUTTON;
     }
-    if button_state & MouseState::BUTTON_RIGHT != 0 {
+    if button_state & u32::from(MouseState::BUTTON_RIGHT) != 0 {
         modifiers |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
     }
-    if button_state & MouseState::BUTTON_MIDDLE != 0 {
+    if button_state & u32::from(MouseState::BUTTON_MIDDLE) != 0 {
         modifiers |= EVENTFLAG_MIDDLE_MOUSE_BUTTON;
     }
     modifiers
@@ -164,8 +193,9 @@ impl MemoryModuleBase for MouseStateModule {
 #[cfg(test)]
 mod tests {
     use super::{
-        button_state_to_event_flags, MouseMoveCoalescer, MouseMoveSnapshot, MouseStateModule,
-        EVENTFLAG_LEFT_MOUSE_BUTTON, EVENTFLAG_MIDDLE_MOUSE_BUTTON, EVENTFLAG_RIGHT_MOUSE_BUTTON,
+        button_flags_to_event_flags, button_state_to_event_flags, IpcMouseLatest,
+        MouseMoveCoalescer, MouseMoveSnapshot, MouseStateModule, EVENTFLAG_LEFT_MOUSE_BUTTON,
+        EVENTFLAG_MIDDLE_MOUSE_BUTTON, EVENTFLAG_RIGHT_MOUSE_BUTTON,
     };
     use crate::modules::protocol::MouseState;
 
@@ -214,6 +244,41 @@ mod tests {
                 MouseState::BUTTON_LEFT | MouseState::BUTTON_RIGHT | MouseState::BUTTON_MIDDLE
             )
         );
+    }
+
+    #[test]
+    fn converts_u32_button_state_to_cef_event_flags() {
+        assert_eq!(0, button_flags_to_event_flags(0));
+        assert_eq!(
+            EVENTFLAG_LEFT_MOUSE_BUTTON,
+            button_flags_to_event_flags(MouseState::BUTTON_LEFT as u32)
+        );
+        assert_eq!(
+            EVENTFLAG_LEFT_MOUSE_BUTTON
+                | EVENTFLAG_RIGHT_MOUSE_BUTTON
+                | EVENTFLAG_MIDDLE_MOUSE_BUTTON,
+            button_flags_to_event_flags(
+                (MouseState::BUTTON_LEFT | MouseState::BUTTON_RIGHT | MouseState::BUTTON_MIDDLE)
+                    as u32
+            )
+        );
+    }
+
+    #[test]
+    fn decodes_ipc_v2_mouse_latest_payload() {
+        let mut payload = [0u8; 16];
+        payload[0..4].copy_from_slice(&123i32.to_le_bytes());
+        payload[4..8].copy_from_slice(&456i32.to_le_bytes());
+        payload[8..12].copy_from_slice(&7u32.to_le_bytes());
+        payload[12] = 1;
+
+        let latest = IpcMouseLatest::decode(&payload).unwrap();
+
+        assert_eq!(123, latest.x);
+        assert_eq!(456, latest.y);
+        assert_eq!(7, latest.buttons);
+        assert!(latest.valid);
+        assert!(IpcMouseLatest::decode(&payload[..12]).is_none());
     }
 
     fn snapshot(x: i16, y: i16, buttons: u8) -> MouseMoveSnapshot {

@@ -11,7 +11,10 @@ pub mod queue;
 pub mod status;
 
 pub use control::{ControlCommand, ControlDecodeError};
-pub use frame::{FramePixelFormat, FramePublishResult, FrameRingState, FrameSlot, FrameType};
+pub use frame::{
+    FrameChannel, FrameChannelSpec, FrameCopyError, FrameCopyResult, FramePixelFormat,
+    FramePublishResult, FrameRingState, FrameSlot, FrameType,
+};
 pub use queue::{MappedQueueError, MappedQueueItem, MappedQueueSpec, MappedSpscQueue};
 pub use status::{
     BrowserState, OutputEvent, OutputEventKind, OutputQueueState, ProcessState, StatusCounters,
@@ -354,7 +357,7 @@ impl ChannelMappedFile {
 
     pub fn try_read_latest(&mut self) -> IpcResult<Option<LatestSnapshot>> {
         let first_header = ChannelHeader::decode(&self.mmap[..CHANNEL_HEADER_SIZE])?;
-        if first_header.header_commit % 2 != 0 {
+        if !first_header.header_commit.is_multiple_of(2) {
             return Ok(None);
         }
 
@@ -370,7 +373,7 @@ impl ChannelMappedFile {
 
         let second_header = ChannelHeader::decode(&self.mmap[..CHANNEL_HEADER_SIZE])?;
         if first_header.header_commit != second_header.header_commit
-            || second_header.header_commit % 2 != 0
+            || !second_header.header_commit.is_multiple_of(2)
         {
             return Ok(None);
         }
@@ -677,7 +680,7 @@ fn sanitize_file_name(name: &str) -> String {
 
 fn next_odd_commit(current: u64) -> u64 {
     let next = current.saturating_add(1);
-    if next % 2 == 0 {
+    if next.is_multiple_of(2) {
         next.saturating_add(1)
     } else {
         next

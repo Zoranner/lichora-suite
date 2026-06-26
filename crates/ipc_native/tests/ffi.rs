@@ -1,13 +1,16 @@
 use ipc::{
     build_browser_channel_name, build_session_channel_name, ChannelKind, ChannelMappedFile,
-    ChannelOpenMode, ChannelSpec, ControlCommand, MappedQueueSpec, MappedSpscQueue,
+    ChannelOpenMode, ChannelSpec, ControlCommand, FrameChannel, FrameChannelSpec, MappedQueueSpec,
+    MappedSpscQueue,
 };
 use ipc_native::{
-    ebi_control_add_browser, ebi_control_send, ebi_error_message, ebi_input_push_event,
-    ebi_input_push_event_for_browser, ebi_input_set_mouse_latest,
-    ebi_input_set_mouse_latest_for_browser, ebi_output_try_read, ebi_session_close,
-    ebi_session_open, ebi_status_read, EbiSessionHandle, EBI_ERROR_BUFFER_TOO_SMALL,
-    EBI_ERROR_INVALID_ARGUMENT, EBI_ERROR_NOT_IMPLEMENTED, EBI_ERROR_QUEUE_FULL, EBI_OK,
+    ebi_control_add_browser, ebi_control_remove_browser, ebi_control_resize_browser,
+    ebi_control_send, ebi_control_shutdown, ebi_error_message, ebi_frame_ack,
+    ebi_frame_try_copy_latest, ebi_input_push_event, ebi_input_push_event_for_browser,
+    ebi_input_set_mouse_latest, ebi_input_set_mouse_latest_for_browser, ebi_output_try_read,
+    ebi_session_close, ebi_session_open, ebi_status_read, EbiSessionHandle,
+    EBI_ERROR_BUFFER_TOO_SMALL, EBI_ERROR_INVALID_ARGUMENT, EBI_ERROR_NOT_IMPLEMENTED,
+    EBI_ERROR_QUEUE_FULL, EBI_OK,
 };
 use std::ffi::CStr;
 use std::ptr;
@@ -69,6 +72,45 @@ fn session_open_creates_session_control_and_status_channel_files() {
         .path()
         .join("EmbeddedBrowser_session-42_status")
         .exists());
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn session_open_reuses_existing_session_control_and_status_channels_without_truncating_queue() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    precreate_session_channels(temp.path(), "session-42");
+    let mut existing_queue = MappedSpscQueue::open_in_dir(
+        temp.path(),
+        &control_queue_spec(),
+        ChannelOpenMode::OpenExisting,
+    )
+    .unwrap();
+    existing_queue
+        .try_push(ipc::MappedQueueItem::new(99, 123, b"preexisting"))
+        .unwrap();
+    drop(existing_queue);
+    let session_id = b"session-42";
+    let mut handle: EbiSessionHandle = ptr::null_mut();
+
+    let result = ebi_session_open(session_id.as_ptr(), session_id.len(), &mut handle);
+
+    assert_eq!(result, EBI_OK);
+    let mut queue = MappedSpscQueue::open_in_dir(
+        temp.path(),
+        &control_queue_spec(),
+        ChannelOpenMode::OpenExisting,
+    )
+    .unwrap();
+    let item = queue
+        .try_pop()
+        .unwrap()
+        .expect("existing control queue item");
+    assert_eq!(item.kind, 99);
+    assert_eq!(item.sequence, 123);
+    assert_eq!(item.payload, b"preexisting");
     assert_eq!(ebi_session_close(handle), EBI_OK);
     std::env::remove_var("EBI_IPC_DIR");
 }
@@ -244,6 +286,138 @@ fn control_add_browser_validates_string_arguments() {
 }
 
 #[test]
+fn typed_control_apis_encode_commands_on_rust_side_and_enqueue_them() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let remove_browser_id = b"browser-A";
+    let resize_browser_id = b"browser-B";
+
+    assert_eq!(
+        ebi_control_remove_browser(
+            handle,
+            13,
+            remove_browser_id.as_ptr(),
+            remove_browser_id.len()
+        ),
+        EBI_OK
+    );
+    assert_eq!(
+        ebi_control_resize_browser(
+            handle,
+            14,
+            resize_browser_id.as_ptr(),
+            resize_browser_id.len(),
+            1920,
+            1080
+        ),
+        EBI_OK
+    );
+    assert_eq!(ebi_control_shutdown(handle, 15), EBI_OK);
+
+    let mut queue = MappedSpscQueue::open_in_dir(
+        temp.path(),
+        &control_queue_spec(),
+        ChannelOpenMode::OpenExisting,
+    )
+    .unwrap();
+    let remove_item = queue.try_pop().unwrap().expect("remove control item");
+    assert_eq!(remove_item.kind, 1);
+    assert_eq!(remove_item.sequence, 13);
+    assert_eq!(
+        ControlCommand::decode(&remove_item.payload).unwrap(),
+        ControlCommand::RemoveBrowser {
+            browser_id: "browser-A".to_string(),
+        }
+    );
+
+    let resize_item = queue.try_pop().unwrap().expect("resize control item");
+    assert_eq!(resize_item.kind, 1);
+    assert_eq!(resize_item.sequence, 14);
+    assert_eq!(
+        ControlCommand::decode(&resize_item.payload).unwrap(),
+        ControlCommand::ResizeBrowser {
+            browser_id: "browser-B".to_string(),
+            width: 1920,
+            height: 1080,
+        }
+    );
+
+    let shutdown_item = queue.try_pop().unwrap().expect("shutdown control item");
+    assert_eq!(shutdown_item.kind, 1);
+    assert_eq!(shutdown_item.sequence, 15);
+    assert_eq!(
+        ControlCommand::decode(&shutdown_item.payload).unwrap(),
+        ControlCommand::Shutdown
+    );
+    assert_eq!(queue.try_pop().unwrap(), None);
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn typed_control_apis_validate_browser_id_arguments() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let browser_id = b"browser-A";
+
+    assert_eq!(
+        ebi_control_remove_browser(ptr::null_mut(), 1, browser_id.as_ptr(), browser_id.len()),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_remove_browser(handle, 1, ptr::null(), browser_id.len()),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_remove_browser(handle, 1, browser_id.as_ptr(), 0),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_remove_browser(handle, 1, b"../bad".as_ptr(), b"../bad".len()),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_remove_browser(handle, 1, [0xff, 0xfe].as_ptr(), 2),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+
+    assert_eq!(
+        ebi_control_resize_browser(
+            ptr::null_mut(),
+            1,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            1,
+            2
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_resize_browser(handle, 1, ptr::null(), browser_id.len(), 1, 2),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_resize_browser(handle, 1, browser_id.as_ptr(), 0, 1, 2),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_resize_browser(handle, 1, b"../bad".as_ptr(), b"../bad".len(), 1, 2),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_control_resize_browser(handle, 1, [0xff, 0xfe].as_ptr(), 2, 1, 2),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
 fn control_send_reports_queue_full_without_overwriting_existing_commands() {
     let _guard = lock_env();
     let temp = tempfile::tempdir().unwrap();
@@ -341,6 +515,55 @@ fn input_set_mouse_latest_for_browser_writes_browser_input_latest_payload() {
         channel.path(),
         temp.path()
             .join("EmbeddedBrowser_session-42_browser-A_input")
+    );
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn input_set_mouse_latest_for_browser_reuses_existing_latest_channel() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let browser_id = b"browser-A";
+
+    assert_eq!(
+        ebi_input_set_mouse_latest_for_browser(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            10,
+            20,
+            1,
+            1
+        ),
+        EBI_OK
+    );
+    assert_eq!(
+        ebi_input_set_mouse_latest_for_browser(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            30,
+            40,
+            2,
+            1
+        ),
+        EBI_OK
+    );
+
+    let mut channel = ChannelMappedFile::open_in_dir(
+        temp.path(),
+        &input_latest_spec("session-42", "browser-A"),
+        ChannelOpenMode::OpenExisting,
+    )
+    .unwrap();
+    let snapshot = channel.try_read_latest().unwrap().expect("mouse latest");
+    assert_eq!(snapshot.header.header_commit, 4);
+    assert_eq!(
+        decode_mouse_latest_payload(&snapshot.payload),
+        (30, 40, 2, true)
     );
     assert_eq!(ebi_session_close(handle), EBI_OK);
     std::env::remove_var("EBI_IPC_DIR");
@@ -897,6 +1120,337 @@ fn output_try_read_validates_pointers_empty_buffer_and_browser_id() {
 }
 
 #[test]
+fn frame_try_copy_latest_returns_zero_bytes_when_frame_channel_is_absent() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let browser_id = b"browser-A";
+    let mut buffer = [0u8; 16];
+    let mut width = i32::MIN;
+    let mut height = i32::MIN;
+    let mut sequence = u64::MAX;
+    let mut written = usize::MAX;
+
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut width,
+            &mut height,
+            &mut sequence,
+            &mut written
+        ),
+        EBI_OK
+    );
+
+    assert_eq!(width, 0);
+    assert_eq!(height, 0);
+    assert_eq!(sequence, 0);
+    assert_eq!(written, 0);
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn frame_try_copy_latest_reports_required_length_when_buffer_is_too_small() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    publish_frame(temp.path(), "session-42", "browser-A", 9, 2, 2, &[1u8; 16]);
+    let browser_id = b"browser-A";
+    let mut buffer = [0u8; 15];
+    let mut width = 0;
+    let mut height = 0;
+    let mut sequence = 0;
+    let mut written = 0;
+
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut width,
+            &mut height,
+            &mut sequence,
+            &mut written
+        ),
+        EBI_ERROR_BUFFER_TOO_SMALL
+    );
+
+    assert_eq!(written, 16);
+    assert_eq!(width, 2);
+    assert_eq!(height, 2);
+    assert_eq!(sequence, 9);
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn frame_try_copy_latest_copies_latest_frame_metadata_and_pixels() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    publish_frame(
+        temp.path(),
+        "session-42",
+        "browser-A",
+        9,
+        2,
+        2,
+        &[1, 2, 3, 4],
+    );
+    let browser_id = b"browser-A";
+    let mut buffer = [0u8; 16];
+    let mut width = 0;
+    let mut height = 0;
+    let mut sequence = 0;
+    let mut written = 0;
+
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut width,
+            &mut height,
+            &mut sequence,
+            &mut written
+        ),
+        EBI_OK
+    );
+
+    assert_eq!(width, 2);
+    assert_eq!(height, 2);
+    assert_eq!(sequence, 9);
+    assert_eq!(written, 4);
+    assert_eq!(&buffer[..4], &[1, 2, 3, 4]);
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn frame_ack_updates_shared_consumer_ack() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    publish_frame(
+        temp.path(),
+        "session-42",
+        "browser-A",
+        9,
+        2,
+        2,
+        &[1, 2, 3, 4],
+    );
+    let browser_id = b"browser-A";
+
+    assert_eq!(
+        ebi_frame_ack(handle, browser_id.as_ptr(), browser_id.len(), 9),
+        EBI_OK
+    );
+
+    let channel = FrameChannel::open_in_dir(
+        temp.path(),
+        &frame_spec("session-42", "browser-A", 2, 64 * 1024 * 1024),
+        ChannelOpenMode::OpenExisting,
+    )
+    .unwrap();
+    assert_eq!(channel.header().consumer_ack, 9);
+    assert_eq!(channel.frame_header().acknowledged_frame, 9);
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
+fn frame_ffi_validates_pointers_empty_buffer_and_browser_id() {
+    let _guard = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("EBI_IPC_DIR", temp.path());
+    let handle = open_test_session();
+    let browser_id = b"browser-A";
+    let mut buffer = [0u8; 4];
+    let mut width = 0;
+    let mut height = 0;
+    let mut sequence = 0;
+    let mut written = 0;
+
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            ptr::null_mut(),
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut width,
+            &mut height,
+            &mut sequence,
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            handle,
+            ptr::null(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut width,
+            &mut height,
+            &mut sequence,
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            handle,
+            browser_id.as_ptr(),
+            0,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut width,
+            &mut height,
+            &mut sequence,
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            ptr::null_mut(),
+            buffer.len(),
+            &mut width,
+            &mut height,
+            &mut sequence,
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            0,
+            &mut width,
+            &mut height,
+            &mut sequence,
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            ptr::null_mut(),
+            &mut height,
+            &mut sequence,
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut width,
+            ptr::null_mut(),
+            &mut sequence,
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut width,
+            &mut height,
+            ptr::null_mut(),
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            handle,
+            browser_id.as_ptr(),
+            browser_id.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut width,
+            &mut height,
+            &mut sequence,
+            ptr::null_mut()
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_try_copy_latest(
+            handle,
+            b"../bad".as_ptr(),
+            b"../bad".len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut width,
+            &mut height,
+            &mut sequence,
+            &mut written
+        ),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_ack(ptr::null_mut(), browser_id.as_ptr(), browser_id.len(), 9),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_ack(handle, ptr::null(), browser_id.len(), 9),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_ack(handle, browser_id.as_ptr(), 0, 9),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_ack(handle, b"../bad".as_ptr(), b"../bad".len(), 9),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        ebi_frame_ack(handle, [0xff, 0xfe].as_ptr(), 2, 9),
+        EBI_ERROR_INVALID_ARGUMENT
+    );
+
+    assert_eq!(ebi_session_close(handle), EBI_OK);
+    std::env::remove_var("EBI_IPC_DIR");
+}
+
+#[test]
 fn session_close_accepts_null_as_noop() {
     assert_eq!(ebi_session_close(ptr::null_mut()), EBI_OK);
 }
@@ -958,6 +1512,19 @@ fn input_queue_spec(session_id: &str, browser_id: &str) -> MappedQueueSpec {
     MappedQueueSpec::new(name, ChannelKind::Input, 1024, 16 * 1024)
 }
 
+fn frame_spec(
+    session_id: &str,
+    browser_id: &str,
+    slot_count: u32,
+    slot_size: u32,
+) -> FrameChannelSpec {
+    FrameChannelSpec::new(
+        build_browser_channel_name(session_id, browser_id, ChannelKind::Frame),
+        slot_count,
+        slot_size,
+    )
+}
+
 fn decode_mouse_latest_payload(payload: &[u8]) -> (i32, i32, u32, bool) {
     assert_eq!(payload.len(), 16);
     assert_eq!(&payload[13..16], &[0, 0, 0]);
@@ -1005,4 +1572,48 @@ fn publish_payload(
             .or_else(|_| ChannelMappedFile::open_in_dir(directory, &spec, ChannelOpenMode::Create))
             .unwrap();
     channel.publish_latest(sequence, 0, payload).unwrap();
+}
+
+fn precreate_session_channels(directory: &std::path::Path, session_id: &str) {
+    let session_spec = ChannelSpec::new(
+        build_session_channel_name(session_id, ChannelKind::Session),
+        ChannelKind::Session,
+        4096,
+    );
+    ChannelMappedFile::open_in_dir(directory, &session_spec, ChannelOpenMode::Create).unwrap();
+    let status_spec = ChannelSpec::new(
+        build_session_channel_name(session_id, ChannelKind::Status),
+        ChannelKind::Status,
+        64 * 1024,
+    );
+    ChannelMappedFile::open_in_dir(directory, &status_spec, ChannelOpenMode::Create).unwrap();
+    MappedSpscQueue::open_in_dir(directory, &control_queue_spec(), ChannelOpenMode::Create)
+        .unwrap();
+}
+
+fn publish_frame(
+    directory: &std::path::Path,
+    session_id: &str,
+    browser_id: &str,
+    sequence: u64,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) {
+    let mut channel = FrameChannel::open_in_dir(
+        directory,
+        &frame_spec(session_id, browser_id, 2, 64 * 1024 * 1024),
+        ChannelOpenMode::OpenExisting,
+    )
+    .or_else(|_| {
+        FrameChannel::open_in_dir(
+            directory,
+            &frame_spec(session_id, browser_id, 2, 64 * 1024 * 1024),
+            ChannelOpenMode::Create,
+        )
+    })
+    .unwrap();
+    channel
+        .publish_full(sequence, width, height, pixels)
+        .unwrap();
 }

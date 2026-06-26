@@ -6,7 +6,7 @@ Rust/CEF headless browser process for the Unity `EmbeddedBrowser` package.
 
 ## 当前状态
 
-- Windows 目标产物为 `dist/win-x64/headless_browser.exe`。
+- Windows 目标产物为 `dist/win-x64/headless_browser.exe` 和 `dist/win-x64/browser_ipc_native.dll`。
 - `dist/win-x64` 同时放置 CEF runtime 文件，例如 `libcef.dll`、pak/dat/bin 文件和 `locales/`。
 - IPC v2 架构、wire format 和实施计划见 `../docs/design/architecture.md`。
 - Capture 将作为 `FrameRing` 一等通道实现，不再是 MemoryStacks 特例。
@@ -24,6 +24,7 @@ headless_browser/
 ├── dist/
 │   └── win-x64/
 │       ├── headless_browser.exe
+│       ├── browser_ipc_native.dll
 │       ├── libcef.dll
 │       ├── *.pak / *.dat / *.bin
 │       └── locales/
@@ -52,8 +53,11 @@ dist/win-x64/
 该目录必须包含：
 
 - `headless_browser.exe`
+- `browser_ipc_native.dll`，供 Unity `BrowserIpcNative` 通过 `DllImport("browser_ipc_native")` 加载
 - CEF runtime：`libcef.dll`、`chrome_elf.dll`、`icudtl.dat`、`resources.pak`、`chrome_*.pak`、`v8_context_snapshot.bin`、`locales/` 等
 - 可选调试文件：`headless_browser.pdb`
+
+同一 DLL 还会复制到 `../BrowserRenderer/Assets/Packages/Plugins/Windows/browser_ipc_native.dll`，这是 Unity Windows 插件加载位置。不要把 `target/` 或 `dist/` 产物提交到 Git；需要版本化 Unity 插件二进制时，应连同对应 `.meta` 一起纳入 `BrowserRenderer` 仓库。
 
 `dist/win-x64/debug.log` 是运行期日志，不应提交。
 

@@ -7,12 +7,14 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{ensure, Result};
-use log::debug;
+use log::{debug, error};
 
 use super::base::MemoryModuleBase;
 use super::protocol::CaptureFrame;
 use crate::ipc::SharedMemoryWrapper;
 
+const FRAME_SLOT_COUNT: u32 = 2;
+const FRAME_SLOT_SIZE: u32 = 64 * 1024 * 1024;
 const MAX_WIDTH: usize = 2560;
 const MAX_HEIGHT: usize = 1440;
 const BYTES_PER_PIXEL: usize = 4;
@@ -46,6 +48,8 @@ pub struct CaptureModule {
     width: i32,
     height: i32,
     shmem: Arc<Mutex<SharedMemoryWrapper>>,
+    frame_channel: Option<::ipc::FrameChannel>,
+    frame_sequence: u64,
     slot: i32,
     sequence: i32,
 }
@@ -62,9 +66,32 @@ impl CaptureModule {
             width,
             height,
             shmem: Arc::new(Mutex::new(raw)),
+            frame_channel: None,
+            frame_sequence: 0,
             slot: 0,
             sequence: 0,
         })
+    }
+
+    pub fn new_with_frame_channel(
+        memory_name: &str,
+        session_id: &str,
+        browser_id: &str,
+        width: i32,
+        height: i32,
+    ) -> Result<Self> {
+        let mut module = Self::new(memory_name, width, height)?;
+        module.frame_channel = match open_or_create_frame_channel(session_id, browser_id) {
+            Ok(channel) => Some(channel),
+            Err(error) => {
+                error!(
+                    "Failed to open FrameChannel for session={} browser={}: {}",
+                    session_id, browser_id, error
+                );
+                None
+            }
+        };
+        Ok(module)
     }
 
     pub fn new_shared(
@@ -73,6 +100,22 @@ impl CaptureModule {
         height: i32,
     ) -> Result<Arc<Mutex<CaptureModule>>> {
         Ok(Arc::new(Mutex::new(Self::new(memory_name, width, height)?)))
+    }
+
+    pub fn new_shared_with_frame_channel(
+        memory_name: &str,
+        session_id: &str,
+        browser_id: &str,
+        width: i32,
+        height: i32,
+    ) -> Result<Arc<Mutex<CaptureModule>>> {
+        Ok(Arc::new(Mutex::new(Self::new_with_frame_channel(
+            memory_name,
+            session_id,
+            browser_id,
+            width,
+            height,
+        )?)))
     }
 
     pub const fn capture_header_offset() -> usize {
@@ -121,6 +164,7 @@ impl CaptureModule {
             "pixel buffer exceeds capture slot size"
         );
 
+        let frame_channel_published = self.publish_frame_channel(width, height, pixels);
         let next_slot = (self.slot + 1) % CAPTURE_SLOT_COUNT as i32;
         let next_sequence = self.sequence.wrapping_add(1);
         let previous_sequence = self.sequence;
@@ -128,7 +172,7 @@ impl CaptureModule {
         let size_changed = width != self.width || height != self.height;
 
         let Some(_capture_guard) = self.capture_lock.try_lock() else {
-            return Ok(false);
+            return Ok(frame_channel_published);
         };
         let mut shmem = self
             .shmem
@@ -137,7 +181,7 @@ impl CaptureModule {
         let ack_sequence = shmem.read_i32_at(CAPTURE_HEADER_OFFSET + 28).unwrap_or(0);
         let previous_frame_acked = previous_sequence == 0 || ack_sequence == previous_sequence;
         if !previous_frame_acked && !size_changed {
-            return Ok(false);
+            return Ok(frame_channel_published);
         }
 
         let dirty_payload = if previous_frame_acked && previous_sequence > 0 {
@@ -176,6 +220,25 @@ impl CaptureModule {
         self.width = width;
         self.height = height;
         Ok(true)
+    }
+
+    fn publish_frame_channel(&mut self, width: i32, height: i32, pixels: &[u8]) -> bool {
+        let Some(channel) = self.frame_channel.as_mut() else {
+            return false;
+        };
+        let next_sequence = self.frame_sequence.saturating_add(1);
+        match channel.publish_full(next_sequence, width as u32, height as u32, pixels) {
+            Ok(result) => {
+                if result.published() {
+                    self.frame_sequence = next_sequence;
+                }
+                result.published()
+            }
+            Err(error) => {
+                error!("FrameChannel publish_full failed: {}", error);
+                false
+            }
+        }
     }
 
     pub fn write_full_frame(&mut self, width: i32, height: i32, pixels: &[u8]) -> Result<()> {
@@ -295,6 +358,32 @@ fn write_i32(buffer: &mut [u8], offset: usize, value: i32) {
     buffer[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
+fn open_or_create_frame_channel(
+    session_id: &str,
+    browser_id: &str,
+) -> Result<::ipc::FrameChannel, ::ipc::FrameCopyError> {
+    let directory = ipc_directory();
+    let spec = frame_channel_spec(session_id, browser_id);
+    ::ipc::FrameChannel::open_in_dir(&directory, &spec, ::ipc::ChannelOpenMode::OpenExisting)
+        .or_else(|_| {
+            ::ipc::FrameChannel::open_in_dir(directory, &spec, ::ipc::ChannelOpenMode::Create)
+        })
+}
+
+fn frame_channel_spec(session_id: &str, browser_id: &str) -> ::ipc::FrameChannelSpec {
+    ::ipc::FrameChannelSpec::new(
+        ::ipc::build_browser_channel_name(session_id, browser_id, ::ipc::ChannelKind::Frame),
+        FRAME_SLOT_COUNT,
+        FRAME_SLOT_SIZE,
+    )
+}
+
+fn ipc_directory() -> std::path::PathBuf {
+    std::env::var_os("EBI_IPC_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("EmbeddedBrowserIpc"))
+}
+
 struct DirtyPayload {
     rects: Vec<DirtyRect>,
     bytes: Vec<u8>,
@@ -398,8 +487,9 @@ impl MemoryModuleBase for CaptureModule {
 
 #[cfg(test)]
 mod tests {
-    use super::{CaptureModule, CAPTURE_HEADER_OFFSET, MAX_PIXEL_BUFFER_SIZE};
+    use super::{ipc_directory, CaptureModule, CAPTURE_HEADER_OFFSET, MAX_PIXEL_BUFFER_SIZE};
     use crate::ipc::SharedMemoryWrapper;
+    use ipc::{ChannelOpenMode, FrameChannel, FrameChannelSpec};
 
     #[test]
     fn writes_capture_v2_full_frame_header_and_slot_payload() {
@@ -562,6 +652,36 @@ mod tests {
             &payload[slot_offset + 24..slot_offset + 32],
             &second[48..56]
         );
+    }
+
+    #[test]
+    fn publishes_full_frame_to_frame_channel() {
+        let session_id = format!("session-{}", uuid::Uuid::new_v4());
+        let browser_id = format!("browser-{}", uuid::Uuid::new_v4());
+        let name = format!("Capture.{}", browser_id);
+        let mut module =
+            CaptureModule::new_with_frame_channel(&name, &session_id, &browser_id, 2, 2).unwrap();
+        let pixels = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
+        module.write_full_frame(2, 2, &pixels).unwrap();
+
+        let mut channel = FrameChannel::open_in_dir(
+            ipc_directory(),
+            &FrameChannelSpec::new(
+                format!("EmbeddedBrowser_{session_id}_{browser_id}_frame"),
+                2,
+                64 * 1024 * 1024,
+            ),
+            ChannelOpenMode::OpenExisting,
+        )
+        .unwrap();
+        let mut actual = vec![0; pixels.len()];
+        let copied = channel.try_copy_latest(&mut actual).unwrap();
+        assert_eq!(copied.width, 2);
+        assert_eq!(copied.height, 2);
+        assert_eq!(copied.sequence, 1);
+        assert_eq!(copied.written, pixels.len());
+        assert_eq!(actual, pixels);
     }
 
     fn pixels(width: usize, height: usize) -> Vec<u8> {

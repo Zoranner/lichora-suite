@@ -49,7 +49,7 @@ if (-not $NoCEF) {
 }
 
 # Build command
-$BuildArgs = @("build")
+$BuildArgs = @("build", "-p", "headless_browser", "-p", "ipc_native")
 
 if ($Release) {
     $BuildArgs += "--release"
@@ -78,12 +78,16 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "=== Build Complete ===" -ForegroundColor Green
 
     if ($Release) {
-        $BinaryPath = Join-Path $PSScriptRoot "target\release\headless_browser.exe"
-        $PdbPath = Join-Path $PSScriptRoot "target\release\headless_browser.pdb"
+        $TargetDir = Join-Path $PSScriptRoot "target\release"
     } else {
-        $BinaryPath = Join-Path $PSScriptRoot "target\debug\headless_browser.exe"
-        $PdbPath = Join-Path $PSScriptRoot "target\debug\headless_browser.pdb"
+        $TargetDir = Join-Path $PSScriptRoot "target\debug"
     }
+
+    $BinaryPath = Join-Path $TargetDir "headless_browser.exe"
+    $PdbPath = Join-Path $TargetDir "headless_browser.pdb"
+    $IpcNativePath = Join-Path $TargetDir "ipc_native.dll"
+    $IpcNativeOutputName = "browser_ipc_native.dll"
+    $UnityPluginDir = Join-Path $PSScriptRoot "..\BrowserRenderer\Assets\Packages\Plugins\Windows"
 
     if (Test-Path $BinaryPath) {
         Write-Host "Executable: $BinaryPath" -ForegroundColor Green
@@ -93,6 +97,20 @@ if ($LASTEXITCODE -eq 0) {
     }
     if (Test-Path $PdbPath) {
         Copy-Item -Path $PdbPath -Destination (Join-Path $DistDir "headless_browser.pdb") -Force
+    }
+    if (Test-Path $IpcNativePath) {
+        New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+        Copy-Item -Path $IpcNativePath -Destination (Join-Path $DistDir $IpcNativeOutputName) -Force
+        Write-Host "Copied IPC native DLL to: $DistDir\$IpcNativeOutputName" -ForegroundColor Green
+
+        if (Test-Path $UnityPluginDir) {
+            Copy-Item -Path $IpcNativePath -Destination (Join-Path $UnityPluginDir $IpcNativeOutputName) -Force
+            Write-Host "Copied IPC native DLL to Unity plugin dir: $UnityPluginDir\$IpcNativeOutputName" -ForegroundColor Green
+        } else {
+            Write-Host "Unity plugin dir not found; IPC native DLL was not copied to BrowserRenderer." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "Warning: IPC native DLL not found at $IpcNativePath" -ForegroundColor Yellow
     }
 
     Write-Host ""
