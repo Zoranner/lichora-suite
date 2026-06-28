@@ -24,13 +24,28 @@ Windows 发布构建：
 .\build.ps1 -Release
 ```
 
-`build.ps1` 成功后把 Rust 可执行文件和 CEF runtime 复制到：
+`build.ps1` 成功后把 Rust 可执行文件、native IPC 插件和 CEF runtime 复制到：
 
 ```text
 dist/win-x64/
 ```
 
 该目录是 Unity 侧应引用的 Windows runtime 目录。`debug.log` 是 CEF 运行期日志，已通过 `.gitignore` 排除。
+
+Linux 发布构建：
+
+```bash
+./setup-linux.sh
+./build.sh --release
+```
+
+`build.sh` 会构建 `headless_browser` 和 `ipc_native`，并组装：
+
+```text
+dist/linux-x64/
+```
+
+同时会把 `libipc_native.so` 重命名复制为 Unity 侧加载的 `libbrowser_ipc_native.so`。
 
 ## Unity handler 运行模型
 
@@ -50,7 +65,7 @@ Unity 集成按 IPC v2 session 模型运行：
 
 ## 模块边界
 
-- `src/main.rs`：CLI、handler loop、Unity 管理命令分发，以及对旧 heartbeat 参数的忽略式兼容解析。
+- `src/main.rs`：CLI、handler loop、Unity 管理命令分发，以及对旧 heartbeat 参数的忽略式兼容解析；这些参数不参与当前退出机制。
 - `src/browser/`：CEF app/client、浏览器实例生命周期、OSR render handler。
 - `src/modules/`：浏览器输入、输出和 capture 的业务适配层。
 - `src/ipc/`：IPC v2 runtime 适配层。

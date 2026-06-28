@@ -3,7 +3,7 @@ name = "headless_browser"
 version = "0.1.0"
 edition = "2021"
 description = "Headless browser implementation using CEF for Unity integration"
-authors = ["Your Team"]
+authors = ["KimoTech"]
 license = "MIT"
 
 [workspace]

@@ -7,6 +7,7 @@ Rust/CEF headless browser process for the Unity `EmbeddedBrowser` package.
 ## 当前状态
 
 - Windows 目标产物为 `dist/win-x64/headless_browser.exe` 和 `dist/win-x64/browser_ipc_native.dll`。
+- Linux 目标产物为 `dist/linux-x64/headless_browser` 和 `dist/linux-x64/libbrowser_ipc_native.so`。
 - Cargo root package 的 binary target 仍叫 `headless_browser`，library target 显式命名为 `headless_browser_core`，避免 Windows MSVC 下同包 bin/lib 同名时争用 `headless_browser.pdb`。
 - `dist/win-x64` 同时放置 CEF runtime 文件，例如 `libcef.dll`、pak/dat/bin 文件和 `locales/`。
 - IPC v2 架构和 wire format 见 `../docs/design/architecture.md`。
@@ -62,6 +63,21 @@ dist/win-x64/
 
 `dist/win-x64/debug.log` 是运行期日志，不应提交。
 
+Linux 发布构建：
+
+```bash
+./setup-linux.sh
+./build.sh --release
+```
+
+脚本成功后，发布目录为：
+
+```text
+dist/linux-x64/
+```
+
+该目录包含 `headless_browser` 和 `libbrowser_ipc_native.so`。同一 native IPC 插件会复制到 `../BrowserRenderer/Assets/Packages/Plugins/Linux/libbrowser_ipc_native.so`，供 Unity Linux Editor/Player 加载。CEF runtime 文件会在 `CEF_PATH` 可用时复制到发布目录。
+
 ## Unity handler 模式
 
 Unity 侧启动 handler 进程时，第一个非选项参数是 handler GUID：
@@ -71,6 +87,8 @@ Unity 侧启动 handler 进程时，第一个非选项参数是 handler GUID：
 ```
 
 进程启动后创建 IPC v2 session，并通过 `control`、`status`、`input`、`frame` 和 `output` 通道完成浏览器管理、输入、帧发布和诊断。原生插件输入、帧和输出热路径统一使用 `ebi_browser_input_open`、`ebi_browser_frame_open` 和 `ebi_browser_output_open` 得到的 typed browser handle；旧 `*_for_browser` session-handle 兼容导出已移除。
+
+旧 Unity 启动参数中的 `--heartbeat-timeout-ms` 和 `--heartbeat-stall-grace-ms` 会被 CLI 解析器忽略，以避免旧配置导致启动失败；它们不是当前 IPC v2 的心跳或退出机制。
 
 单 URL 模式仍可用于本地手工调试：
 
