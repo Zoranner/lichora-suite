@@ -3,10 +3,6 @@ use std::path::Path;
 use anyhow::Result;
 use log::warn;
 
-const OUTPUT_LATEST_CAPACITY_BYTES: u32 = 16 * 1024;
-const OUTPUT_QUEUE_ITEM_CAPACITY: u32 = 256;
-const OUTPUT_QUEUE_MAX_PAYLOAD_LEN: u32 = 16 * 1024;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserOutputIpcSpec {
     pub latest: ipc::ChannelSpec,
@@ -80,20 +76,9 @@ impl BrowserOutputIpcChannels {
 }
 
 pub(crate) fn browser_output_ipc_spec(session_id: &str, browser_id: &str) -> BrowserOutputIpcSpec {
-    let latest_name =
-        ipc::build_browser_channel_name(session_id, browser_id, ipc::ChannelKind::Output);
     BrowserOutputIpcSpec {
-        latest: ipc::ChannelSpec::new(
-            latest_name.clone(),
-            ipc::ChannelKind::Output,
-            OUTPUT_LATEST_CAPACITY_BYTES,
-        ),
-        queue: ipc::MappedQueueSpec::new(
-            format!("{latest_name}_queue"),
-            ipc::ChannelKind::Output,
-            OUTPUT_QUEUE_ITEM_CAPACITY,
-            OUTPUT_QUEUE_MAX_PAYLOAD_LEN,
-        ),
+        latest: ipc::output_latest_spec(session_id, browser_id),
+        queue: ipc::output_queue_spec(session_id, browser_id),
     }
 }
 
@@ -105,28 +90,24 @@ fn ipc_directory() -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        browser_output_ipc_spec, BrowserOutputIpcChannels, OUTPUT_LATEST_CAPACITY_BYTES,
-        OUTPUT_QUEUE_ITEM_CAPACITY, OUTPUT_QUEUE_MAX_PAYLOAD_LEN,
-    };
+    use super::{browser_output_ipc_spec, BrowserOutputIpcChannels};
 
     #[test]
     fn browser_output_ipc_spec_matches_ipc_native_names_and_layout() {
         let spec = browser_output_ipc_spec("session-42", "browser-A");
+        let native_latest = ipc::output_latest_spec("session-42", "browser-A");
+        let native_queue = ipc::output_queue_spec("session-42", "browser-A");
 
+        assert_eq!(native_latest, spec.latest);
+        assert_eq!(native_queue, spec.queue);
         assert_eq!(
-            "EmbeddedBrowser_session-42_browser-A_output",
-            spec.latest.name
+            ipc::CHANNEL_HEADER_SIZE + 64 * 1024,
+            spec.latest.mapped_len()
         );
-        assert_eq!(ipc::ChannelKind::Output, spec.latest.channel_kind);
-        assert_eq!(OUTPUT_LATEST_CAPACITY_BYTES, spec.latest.capacity_bytes);
         assert_eq!(
-            "EmbeddedBrowser_session-42_browser-A_output_queue",
-            spec.queue.name
+            ipc::CHANNEL_HEADER_SIZE + 64 + 1024 * (16 + 16 * 1024),
+            spec.queue.mapped_len()
         );
-        assert_eq!(ipc::ChannelKind::Output, spec.queue.channel_kind);
-        assert_eq!(OUTPUT_QUEUE_ITEM_CAPACITY, spec.queue.item_capacity);
-        assert_eq!(OUTPUT_QUEUE_MAX_PAYLOAD_LEN, spec.queue.max_payload_len);
     }
 
     #[test]

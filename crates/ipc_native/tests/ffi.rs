@@ -1,8 +1,7 @@
 use ipc::OutputPayload;
 use ipc::{
     build_browser_channel_name, build_session_channel_name, ChannelKind, ChannelMappedFile,
-    ChannelOpenMode, ChannelSpec, ControlCommand, FrameChannel, FrameChannelSpec, MappedQueueSpec,
-    MappedSpscQueue,
+    ChannelOpenMode, ChannelSpec, ControlCommand, FrameChannel, MappedQueueSpec, MappedSpscQueue,
 };
 use ipc_native::{
     EbiBrowserFrameHandle, EbiBrowserInputHandle, EbiBrowserOutputHandle, EbiErrorCode,
@@ -1259,7 +1258,7 @@ fn browser_frame_handle_copies_and_acks_without_browser_id_on_hot_path() {
     assert_eq!(ebi_browser_frame_ack(frame, 9), EBI_OK);
     let channel = FrameChannel::open_in_dir(
         temp.path(),
-        &frame_spec("session-42", "browser-A", 2, 64 * 1024 * 1024),
+        &frame_spec("session-42", "browser-A"),
         ChannelOpenMode::OpenExisting,
     )
     .unwrap();
@@ -1294,7 +1293,7 @@ fn frame_ack_updates_shared_consumer_ack() {
 
     let channel = FrameChannel::open_in_dir(
         temp.path(),
-        &frame_spec("session-42", "browser-A", 2, 64 * 1024 * 1024),
+        &frame_spec("session-42", "browser-A"),
         ChannelOpenMode::OpenExisting,
     )
     .unwrap();
@@ -1520,49 +1519,23 @@ fn open_test_session() -> EbiSessionHandle {
 }
 
 fn control_queue_spec() -> MappedQueueSpec {
-    MappedQueueSpec::new(
-        build_session_channel_name("session-42", ChannelKind::Control),
-        ChannelKind::Control,
-        256,
-        16 * 1024,
-    )
+    ipc::control_queue_spec("session-42")
 }
 
 fn input_latest_spec(session_id: &str, browser_id: &str) -> ChannelSpec {
-    ChannelSpec::new(
-        build_browser_channel_name(session_id, browser_id, ChannelKind::Input),
-        ChannelKind::Input,
-        64,
-    )
+    ipc::input_latest_spec(session_id, browser_id)
 }
 
 fn input_queue_spec(session_id: &str, browser_id: &str) -> MappedQueueSpec {
-    let name = format!(
-        "{}_queue",
-        build_browser_channel_name(session_id, browser_id, ChannelKind::Input)
-    );
-    MappedQueueSpec::new(name, ChannelKind::Input, 1024, 16 * 1024)
+    ipc::input_queue_spec(session_id, browser_id)
 }
 
 fn output_queue_spec(session_id: &str, browser_id: &str) -> MappedQueueSpec {
-    let name = format!(
-        "{}_queue",
-        build_browser_channel_name(session_id, browser_id, ChannelKind::Output)
-    );
-    MappedQueueSpec::new(name, ChannelKind::Output, 1024, 16 * 1024)
+    ipc::output_queue_spec(session_id, browser_id)
 }
 
-fn frame_spec(
-    session_id: &str,
-    browser_id: &str,
-    slot_count: u32,
-    slot_size: u32,
-) -> FrameChannelSpec {
-    FrameChannelSpec::new(
-        build_browser_channel_name(session_id, browser_id, ChannelKind::Frame),
-        slot_count,
-        slot_size,
-    )
+fn frame_spec(session_id: &str, browser_id: &str) -> ipc::FrameChannelSpec {
+    ipc::frame_channel_spec(session_id, browser_id)
 }
 
 fn decode_mouse_latest_payload(payload: &[u8]) -> (i32, i32, u32, i32, i32, bool) {
@@ -1644,13 +1617,13 @@ fn publish_frame(
 ) {
     let mut channel = FrameChannel::open_in_dir(
         directory,
-        &frame_spec(session_id, browser_id, 2, 64 * 1024 * 1024),
+        &frame_spec(session_id, browser_id),
         ChannelOpenMode::OpenExisting,
     )
     .or_else(|_| {
         FrameChannel::open_in_dir(
             directory,
-            &frame_spec(session_id, browser_id, 2, 64 * 1024 * 1024),
+            &frame_spec(session_id, browser_id),
             ChannelOpenMode::Create,
         )
     })

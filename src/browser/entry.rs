@@ -36,9 +36,6 @@ const MAX_HEIGHT: i32 = 1440;
 const REPAINT_MAX_ATTEMPTS: u8 = 12;
 const REPAINT_DELAY: Duration = Duration::from_millis(33);
 const CLOSE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
-const INPUT_LATEST_CAPACITY_BYTES: u32 = 64;
-const INPUT_QUEUE_ITEM_CAPACITY: u32 = 1024;
-const INPUT_QUEUE_MAX_PAYLOAD_LEN: u32 = 16 * 1024;
 
 /// Configuration for a browser instance.
 #[derive(Clone)]
@@ -762,20 +759,9 @@ impl BrowserInputIpcChannels {
 }
 
 fn browser_input_ipc_spec(session_id: &str, browser_id: &str) -> BrowserInputIpcSpec {
-    let latest_name =
-        ipc::build_browser_channel_name(session_id, browser_id, ipc::ChannelKind::Input);
     BrowserInputIpcSpec {
-        latest: ipc::ChannelSpec::new(
-            latest_name.clone(),
-            ipc::ChannelKind::Input,
-            INPUT_LATEST_CAPACITY_BYTES,
-        ),
-        queue: ipc::MappedQueueSpec::new(
-            format!("{latest_name}_queue"),
-            ipc::ChannelKind::Input,
-            INPUT_QUEUE_ITEM_CAPACITY,
-            INPUT_QUEUE_MAX_PAYLOAD_LEN,
-        ),
+        latest: ipc::input_latest_spec(session_id, browser_id),
+        queue: ipc::input_queue_spec(session_id, browser_id),
     }
 }
 
@@ -1061,27 +1047,15 @@ pub fn shutdown_browser_runtime() {}
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        browser_input_ipc_spec, INPUT_LATEST_CAPACITY_BYTES, INPUT_QUEUE_ITEM_CAPACITY,
-        INPUT_QUEUE_MAX_PAYLOAD_LEN,
-    };
+    use super::browser_input_ipc_spec;
 
     #[test]
     fn browser_input_ipc_spec_matches_ipc_native_names_and_layout() {
         let spec = browser_input_ipc_spec("session-42", "browser-A");
+        let native_latest = ipc::input_latest_spec("session-42", "browser-A");
+        let native_queue = ipc::input_queue_spec("session-42", "browser-A");
 
-        assert_eq!(
-            "EmbeddedBrowser_session-42_browser-A_input",
-            spec.latest.name
-        );
-        assert_eq!(ipc::ChannelKind::Input, spec.latest.channel_kind);
-        assert_eq!(INPUT_LATEST_CAPACITY_BYTES, spec.latest.capacity_bytes);
-        assert_eq!(
-            "EmbeddedBrowser_session-42_browser-A_input_queue",
-            spec.queue.name
-        );
-        assert_eq!(ipc::ChannelKind::Input, spec.queue.channel_kind);
-        assert_eq!(INPUT_QUEUE_ITEM_CAPACITY, spec.queue.item_capacity);
-        assert_eq!(INPUT_QUEUE_MAX_PAYLOAD_LEN, spec.queue.max_payload_len);
+        assert_eq!(native_latest, spec.latest);
+        assert_eq!(native_queue, spec.queue);
     }
 }

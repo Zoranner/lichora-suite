@@ -35,6 +35,18 @@ pub const CHANNEL_HEADER_SIZE: usize = 64;
 pub const LATEST_PAYLOAD_LENGTH_SIZE: usize = 4;
 pub const FRAME_HEADER_SIZE: usize = 88;
 pub const FRAME_PIXEL_FORMAT_BGRA32: u32 = 1;
+pub const SESSION_CAPACITY_BYTES: u32 = 4096;
+pub const STATUS_CAPACITY_BYTES: u32 = 64 * 1024;
+pub const CONTROL_QUEUE_ITEM_CAPACITY: u32 = 256;
+pub const CONTROL_QUEUE_MAX_PAYLOAD_LEN: u32 = 16 * 1024;
+pub const INPUT_LATEST_CAPACITY_BYTES: u32 = 64;
+pub const INPUT_QUEUE_ITEM_CAPACITY: u32 = 1024;
+pub const INPUT_QUEUE_MAX_PAYLOAD_LEN: u32 = 16 * 1024;
+pub const OUTPUT_LATEST_CAPACITY_BYTES: u32 = 64 * 1024;
+pub const OUTPUT_QUEUE_ITEM_CAPACITY: u32 = 1024;
+pub const OUTPUT_QUEUE_MAX_PAYLOAD_LEN: u32 = 16 * 1024;
+pub const FRAME_SLOT_COUNT: u32 = 2;
+pub const FRAME_SLOT_SIZE: u32 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -224,6 +236,75 @@ pub fn build_browser_channel_name(
     format!(
         "EmbeddedBrowser_{session_id}_{browser_id}_{}",
         channel_kind.suffix()
+    )
+}
+
+pub fn session_channel_spec(session_id: &str) -> ChannelSpec {
+    ChannelSpec::new(
+        build_session_channel_name(session_id, ChannelKind::Session),
+        ChannelKind::Session,
+        SESSION_CAPACITY_BYTES,
+    )
+}
+
+pub fn status_channel_spec(session_id: &str) -> ChannelSpec {
+    ChannelSpec::new(
+        build_session_channel_name(session_id, ChannelKind::Status),
+        ChannelKind::Status,
+        STATUS_CAPACITY_BYTES,
+    )
+}
+
+pub fn control_queue_spec(session_id: &str) -> MappedQueueSpec {
+    MappedQueueSpec::new(
+        build_session_channel_name(session_id, ChannelKind::Control),
+        ChannelKind::Control,
+        CONTROL_QUEUE_ITEM_CAPACITY,
+        CONTROL_QUEUE_MAX_PAYLOAD_LEN,
+    )
+}
+
+pub fn input_latest_spec(session_id: &str, browser_id: &str) -> ChannelSpec {
+    ChannelSpec::new(
+        build_browser_channel_name(session_id, browser_id, ChannelKind::Input),
+        ChannelKind::Input,
+        INPUT_LATEST_CAPACITY_BYTES,
+    )
+}
+
+pub fn input_queue_spec(session_id: &str, browser_id: &str) -> MappedQueueSpec {
+    let latest_name = build_browser_channel_name(session_id, browser_id, ChannelKind::Input);
+    MappedQueueSpec::new(
+        format!("{latest_name}_queue"),
+        ChannelKind::Input,
+        INPUT_QUEUE_ITEM_CAPACITY,
+        INPUT_QUEUE_MAX_PAYLOAD_LEN,
+    )
+}
+
+pub fn output_latest_spec(session_id: &str, browser_id: &str) -> ChannelSpec {
+    ChannelSpec::new(
+        build_browser_channel_name(session_id, browser_id, ChannelKind::Output),
+        ChannelKind::Output,
+        OUTPUT_LATEST_CAPACITY_BYTES,
+    )
+}
+
+pub fn output_queue_spec(session_id: &str, browser_id: &str) -> MappedQueueSpec {
+    let latest_name = build_browser_channel_name(session_id, browser_id, ChannelKind::Output);
+    MappedQueueSpec::new(
+        format!("{latest_name}_queue"),
+        ChannelKind::Output,
+        OUTPUT_QUEUE_ITEM_CAPACITY,
+        OUTPUT_QUEUE_MAX_PAYLOAD_LEN,
+    )
+}
+
+pub fn frame_channel_spec(session_id: &str, browser_id: &str) -> FrameChannelSpec {
+    FrameChannelSpec::new(
+        build_browser_channel_name(session_id, browser_id, ChannelKind::Frame),
+        FRAME_SLOT_COUNT,
+        FRAME_SLOT_SIZE,
     )
 }
 

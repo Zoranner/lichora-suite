@@ -12,8 +12,6 @@ use headless_browser_core::browser::{shutdown_browser_runtime, BrowserConfig, Br
 use log::{error, info, warn};
 
 const SINGLE_INSTANCE_LOCK: &str = "com.kimtech.headless-browser";
-const CONTROL_QUEUE_ITEM_CAPACITY: u32 = 256;
-const CONTROL_QUEUE_MAX_PAYLOAD_LEN: u32 = 16 * 1024;
 
 fn main() {
     if is_cef_subprocess() {
@@ -205,12 +203,7 @@ fn open_control_queue_in_dir(
 }
 
 fn control_queue_spec(handler_guid: &str) -> ipc::MappedQueueSpec {
-    ipc::MappedQueueSpec::new(
-        ipc::build_session_channel_name(handler_guid, ipc::ChannelKind::Control),
-        ipc::ChannelKind::Control,
-        CONTROL_QUEUE_ITEM_CAPACITY,
-        CONTROL_QUEUE_MAX_PAYLOAD_LEN,
-    )
+    ipc::control_queue_spec(handler_guid)
 }
 
 fn ipc_directory() -> PathBuf {

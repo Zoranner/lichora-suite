@@ -2,8 +2,6 @@
 
 use anyhow::{ensure, Result};
 
-const FRAME_SLOT_COUNT: u32 = 2;
-const FRAME_SLOT_SIZE: u32 = 64 * 1024 * 1024;
 const MAX_WIDTH: usize = 2560;
 const MAX_HEIGHT: usize = 1440;
 const BYTES_PER_PIXEL: usize = 4;
@@ -70,8 +68,7 @@ impl CaptureModule {
 
 fn open_or_create_frame_channel(session_id: &str, browser_id: &str) -> Result<ipc::FrameChannel> {
     let directory = ipc_directory();
-    let name = ipc::build_browser_channel_name(session_id, browser_id, ipc::ChannelKind::Frame);
-    let spec = ipc::FrameChannelSpec::new(name, FRAME_SLOT_COUNT, FRAME_SLOT_SIZE);
+    let spec = ipc::frame_channel_spec(session_id, browser_id);
     ipc::FrameChannel::open_in_dir(&directory, &spec, ipc::ChannelOpenMode::OpenExisting)
         .or_else(|_| {
             ipc::FrameChannel::open_in_dir(&directory, &spec, ipc::ChannelOpenMode::Create)
@@ -101,9 +98,7 @@ mod tests {
 
         assert!(module.write_paint_frame(2, 2, &pixels, &[]).unwrap());
 
-        let name =
-            ipc::build_browser_channel_name(&session_id, &browser_id, ipc::ChannelKind::Frame);
-        let spec = ipc::FrameChannelSpec::new(name, 2, 64 * 1024 * 1024);
+        let spec = ipc::frame_channel_spec(&session_id, &browser_id);
         let mut reader =
             ipc::FrameChannel::open_in_dir(temp.path(), &spec, ipc::ChannelOpenMode::OpenExisting)
                 .unwrap();

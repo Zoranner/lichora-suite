@@ -3,12 +3,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::ptr;
 
-use ipc::{
-    build_browser_channel_name, build_session_channel_name, ChannelKind, ChannelMappedFile,
-    ChannelOpenMode, ChannelSpec, ControlCommand, MappedQueueItem, MappedQueueSpec,
-    MappedSpscQueue,
-};
-use ipc::{FrameChannel, FrameChannelSpec, FrameCopyError};
+use ipc::{ChannelMappedFile, ChannelOpenMode, ControlCommand, MappedQueueItem, MappedSpscQueue};
+use ipc::{FrameChannel, FrameCopyError};
 use ipc::{InputChannelState, InputEvent, InputEventKind, MouseLatest};
 
 pub type EbiErrorCode = i32;
@@ -24,16 +20,6 @@ pub const EBI_ERROR_IO: EbiErrorCode = 3;
 pub const EBI_ERROR_BUFFER_TOO_SMALL: EbiErrorCode = 4;
 pub const EBI_ERROR_QUEUE_FULL: EbiErrorCode = 5;
 pub const EBI_ERROR_PANIC: EbiErrorCode = 100;
-
-const INPUT_LATEST_CAPACITY_BYTES: u32 = 64;
-const INPUT_QUEUE_ITEM_CAPACITY: u32 = 1024;
-const INPUT_QUEUE_MAX_PAYLOAD_LEN: u32 = 16 * 1024;
-const OUTPUT_LATEST_CAPACITY_BYTES: u32 = 64 * 1024;
-const OUTPUT_QUEUE_ITEM_CAPACITY: u32 = 1024;
-const OUTPUT_QUEUE_MAX_PAYLOAD_LEN: u32 = 16 * 1024;
-const MOUSE_LATEST_PAYLOAD_LEN: usize = 24;
-const FRAME_SLOT_COUNT: u32 = 2;
-const FRAME_SLOT_SIZE: u32 = 64 * 1024 * 1024;
 
 #[repr(C)]
 pub struct EbiSession {
@@ -97,15 +83,14 @@ pub unsafe extern "C" fn ebi_session_open(
             return EBI_ERROR_INVALID_ARGUMENT;
         };
 
-        let Ok(session_channel) = open_session_channel(session_id, ChannelKind::Session, 4096)
+        let Ok(session_channel) = open_session_channel(&ipc::session_channel_spec(session_id))
         else {
             return EBI_ERROR_IO;
         };
         let Ok(control_queue) = open_control_queue(session_id) else {
             return EBI_ERROR_IO;
         };
-        let Ok(status_channel) = open_session_channel(session_id, ChannelKind::Status, 64 * 1024)
-        else {
+        let Ok(status_channel) = open_session_channel(&ipc::status_channel_spec(session_id)) else {
             return EBI_ERROR_IO;
         };
 
@@ -920,30 +905,15 @@ fn ffi_boundary(call: impl FnOnce() -> EbiErrorCode) -> EbiErrorCode {
     catch_unwind(AssertUnwindSafe(call)).unwrap_or(EBI_ERROR_PANIC)
 }
 
-fn open_session_channel(
-    session_id: &str,
-    channel_kind: ChannelKind,
-    capacity_bytes: u32,
-) -> Result<ChannelMappedFile, ipc::IpcError> {
-    let name = build_session_channel_name(session_id, channel_kind);
-    let spec = ChannelSpec::new(name, channel_kind, capacity_bytes);
-    open_or_create_session_channel(&spec)
+fn open_session_channel(spec: &ipc::ChannelSpec) -> Result<ChannelMappedFile, ipc::IpcError> {
+    open_or_create_session_channel(spec)
 }
 
 fn open_control_queue(session_id: &str) -> Result<MappedSpscQueue, ipc::MappedQueueError> {
     let directory = ipc_directory();
-    let spec = control_queue_spec(session_id);
+    let spec = ipc::control_queue_spec(session_id);
     MappedSpscQueue::open_in_dir(&directory, &spec, ChannelOpenMode::OpenExisting)
         .or_else(|_| MappedSpscQueue::open_in_dir(directory, &spec, ChannelOpenMode::Create))
-}
-
-fn control_queue_spec(session_id: &str) -> MappedQueueSpec {
-    MappedQueueSpec::new(
-        build_session_channel_name(session_id, ChannelKind::Control),
-        ChannelKind::Control,
-        256,
-        16 * 1024,
-    )
 }
 
 fn open_input_latest_channel(
@@ -951,17 +921,9 @@ fn open_input_latest_channel(
     browser_id: &str,
 ) -> Result<ChannelMappedFile, ipc::IpcError> {
     let directory = ipc_directory();
-    let spec = input_latest_spec(session_id, browser_id);
+    let spec = ipc::input_latest_spec(session_id, browser_id);
     ChannelMappedFile::open_in_dir(&directory, &spec, ChannelOpenMode::OpenExisting)
         .or_else(|_| ChannelMappedFile::open_in_dir(directory, &spec, ChannelOpenMode::Create))
-}
-
-fn input_latest_spec(session_id: &str, browser_id: &str) -> ChannelSpec {
-    ChannelSpec::new(
-        build_browser_channel_name(session_id, browser_id, ChannelKind::Input),
-        ChannelKind::Input,
-        INPUT_LATEST_CAPACITY_BYTES,
-    )
 }
 
 fn open_input_queue(
@@ -969,22 +931,9 @@ fn open_input_queue(
     browser_id: &str,
 ) -> Result<MappedSpscQueue, ipc::MappedQueueError> {
     let directory = ipc_directory();
-    let spec = input_queue_spec(session_id, browser_id);
+    let spec = ipc::input_queue_spec(session_id, browser_id);
     MappedSpscQueue::open_in_dir(&directory, &spec, ChannelOpenMode::OpenExisting)
         .or_else(|_| MappedSpscQueue::open_in_dir(directory, &spec, ChannelOpenMode::Create))
-}
-
-fn input_queue_spec(session_id: &str, browser_id: &str) -> MappedQueueSpec {
-    let name = format!(
-        "{}_queue",
-        build_browser_channel_name(session_id, browser_id, ChannelKind::Input)
-    );
-    MappedQueueSpec::new(
-        name,
-        ChannelKind::Input,
-        INPUT_QUEUE_ITEM_CAPACITY,
-        INPUT_QUEUE_MAX_PAYLOAD_LEN,
-    )
 }
 
 fn open_output_latest_if_exists(
@@ -992,7 +941,7 @@ fn open_output_latest_if_exists(
     browser_id: &str,
 ) -> Result<Option<ChannelMappedFile>, ipc::IpcError> {
     let directory = ipc_directory();
-    let spec = output_latest_spec(session_id, browser_id);
+    let spec = ipc::output_latest_spec(session_id, browser_id);
     let path = directory.join(&spec.name);
     if !path.exists() {
         return Ok(None);
@@ -1006,17 +955,9 @@ fn open_output_latest(
     browser_id: &str,
 ) -> Result<ChannelMappedFile, ipc::IpcError> {
     let directory = ipc_directory();
-    let spec = output_latest_spec(session_id, browser_id);
+    let spec = ipc::output_latest_spec(session_id, browser_id);
     ChannelMappedFile::open_in_dir(&directory, &spec, ChannelOpenMode::OpenExisting)
         .or_else(|_| ChannelMappedFile::open_in_dir(directory, &spec, ChannelOpenMode::Create))
-}
-
-fn output_latest_spec(session_id: &str, browser_id: &str) -> ChannelSpec {
-    ChannelSpec::new(
-        build_browser_channel_name(session_id, browser_id, ChannelKind::Output),
-        ChannelKind::Output,
-        OUTPUT_LATEST_CAPACITY_BYTES,
-    )
 }
 
 fn open_output_queue(
@@ -1024,22 +965,9 @@ fn open_output_queue(
     browser_id: &str,
 ) -> Result<MappedSpscQueue, ipc::MappedQueueError> {
     let directory = ipc_directory();
-    let spec = output_queue_spec(session_id, browser_id);
+    let spec = ipc::output_queue_spec(session_id, browser_id);
     MappedSpscQueue::open_in_dir(&directory, &spec, ChannelOpenMode::OpenExisting)
         .or_else(|_| MappedSpscQueue::open_in_dir(directory, &spec, ChannelOpenMode::Create))
-}
-
-fn output_queue_spec(session_id: &str, browser_id: &str) -> MappedQueueSpec {
-    let name = format!(
-        "{}_queue",
-        build_browser_channel_name(session_id, browser_id, ChannelKind::Output)
-    );
-    MappedQueueSpec::new(
-        name,
-        ChannelKind::Output,
-        OUTPUT_QUEUE_ITEM_CAPACITY,
-        OUTPUT_QUEUE_MAX_PAYLOAD_LEN,
-    )
 }
 
 fn ipc_directory() -> PathBuf {
@@ -1058,7 +986,9 @@ fn read_output_latest(
     channel.try_read_latest()
 }
 
-fn open_or_create_session_channel(spec: &ChannelSpec) -> Result<ChannelMappedFile, ipc::IpcError> {
+fn open_or_create_session_channel(
+    spec: &ipc::ChannelSpec,
+) -> Result<ChannelMappedFile, ipc::IpcError> {
     let directory = ipc_directory();
     ChannelMappedFile::open_in_dir(&directory, spec, ChannelOpenMode::OpenExisting)
         .or_else(|_| ChannelMappedFile::open_in_dir(directory, spec, ChannelOpenMode::Create))
@@ -1069,7 +999,7 @@ fn open_frame_channel_if_exists(
     browser_id: &str,
 ) -> Result<Option<FrameChannel>, FrameCopyError> {
     let directory = ipc_directory();
-    let spec = frame_spec(session_id, browser_id);
+    let spec = ipc::frame_channel_spec(session_id, browser_id);
     let path = directory.join(&spec.name);
     if !path.exists() {
         return Ok(None);
@@ -1080,17 +1010,9 @@ fn open_frame_channel_if_exists(
 
 fn open_frame_channel(session_id: &str, browser_id: &str) -> Result<FrameChannel, FrameCopyError> {
     let directory = ipc_directory();
-    let spec = frame_spec(session_id, browser_id);
+    let spec = ipc::frame_channel_spec(session_id, browser_id);
     FrameChannel::open_in_dir(&directory, &spec, ChannelOpenMode::OpenExisting)
         .or_else(|_| FrameChannel::open_in_dir(directory, &spec, ChannelOpenMode::Create))
-}
-
-fn frame_spec(session_id: &str, browser_id: &str) -> FrameChannelSpec {
-    FrameChannelSpec::new(
-        build_browser_channel_name(session_id, browser_id, ChannelKind::Frame),
-        FRAME_SLOT_COUNT,
-        FRAME_SLOT_SIZE,
-    )
 }
 
 fn copy_payload_to_c_buffer(
@@ -1183,8 +1105,7 @@ fn encode_mouse_latest_payload(
     delta_x: i32,
     delta_y: i32,
     valid: bool,
-) -> [u8; MOUSE_LATEST_PAYLOAD_LEN] {
-    debug_assert_eq!(MOUSE_LATEST_PAYLOAD_LEN, MouseLatest::PAYLOAD_SIZE);
+) -> [u8; MouseLatest::PAYLOAD_SIZE] {
     MouseLatest {
         x,
         y,
