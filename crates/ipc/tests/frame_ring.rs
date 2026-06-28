@@ -1,6 +1,7 @@
 use ipc::{
     build_browser_channel_name, ChannelKind, ChannelOpenMode, FrameChannel, FrameChannelSpec,
-    FrameCopyError, FramePublishResult, FrameRingState, FrameType,
+    FrameCopyError, FramePublishResult, FrameRingState, FrameType, CHANNEL_HEADER_SIZE,
+    FRAME_HEADER_SIZE,
 };
 
 #[test]
@@ -23,18 +24,18 @@ fn publishes_full_frame_into_latest_slot() {
 }
 
 #[test]
-fn drops_same_size_frame_when_previous_frame_is_unacknowledged() {
+fn latest_frame_replaces_same_size_frame_even_when_previous_frame_is_unacknowledged() {
     let mut ring = FrameRingState::new(2, 16);
 
     assert!(ring.publish_full(1, 2, 2, &[1]).published());
     let result = ring.publish_full(2, 2, 2, &[2]);
 
-    assert_eq!(result, FramePublishResult::Dropped);
+    assert_eq!(result, FramePublishResult::Published { slot_index: 1 });
     assert_eq!(ring.submitted_count(), 2);
-    assert_eq!(ring.published_count(), 1);
+    assert_eq!(ring.published_count(), 2);
     assert_eq!(ring.dropped_count(), 1);
-    assert_eq!(ring.latest_frame().unwrap().sequence, 1);
-    assert_eq!(ring.latest_frame().unwrap().pixels, vec![1]);
+    assert_eq!(ring.latest_frame().unwrap().sequence, 2);
+    assert_eq!(ring.latest_frame().unwrap().pixels, vec![2]);
 }
 
 #[test]
@@ -128,6 +129,40 @@ fn frame_channel_copies_latest_frame_metadata_and_pixels() {
     assert_eq!(result.sequence, 7);
     assert_eq!(result.written, 4);
     assert_eq!(&buffer[..4], &[1, 2, 3, 4]);
+}
+
+#[test]
+fn frame_channel_publish_does_not_clear_bytes_after_payload() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut channel = FrameChannel::open_in_dir(
+        temp.path(),
+        &frame_spec("session-42", "browser-A", 2, 64),
+        ChannelOpenMode::Create,
+    )
+    .unwrap();
+
+    let first = channel.publish_full(7, 2, 2, &[9u8; 64]).unwrap();
+    assert_eq!(first, FramePublishResult::Published { slot_index: 1 });
+    channel.ack(7).unwrap();
+    let second = channel.publish_full(8, 2, 2, &[8u8; 64]).unwrap();
+    assert_eq!(second, FramePublishResult::Published { slot_index: 0 });
+    channel.ack(8).unwrap();
+    let third = channel.publish_full(9, 2, 2, &[1, 2, 3, 4]).unwrap();
+    assert_eq!(third, FramePublishResult::Published { slot_index: 1 });
+    let path = channel.path().to_path_buf();
+    drop(channel);
+
+    let bytes = std::fs::read(path).unwrap();
+    let second_slot_start = CHANNEL_HEADER_SIZE + FRAME_HEADER_SIZE + 64;
+
+    assert_eq!(
+        &bytes[second_slot_start..second_slot_start + 4],
+        &[1, 2, 3, 4]
+    );
+    assert_eq!(
+        &bytes[second_slot_start + 4..second_slot_start + 8],
+        &[9, 9, 9, 9]
+    );
 }
 
 #[test]

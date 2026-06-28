@@ -16,8 +16,8 @@ use log::debug;
 #[cfg(feature = "cef")]
 use log::error;
 
-use crate::ipc::SharedMemoryWrapper;
-use crate::modules::{encode_caret_payload, CaptureModule};
+use super::output::BrowserOutputIpcChannels;
+use crate::modules::CaptureModule;
 
 /// OffScreen render handler state (shared between CEF callbacks and BrowserEntry).
 #[derive(Clone)]
@@ -29,7 +29,7 @@ pub struct OsrRenderHandler {
     /// Written from `on_paint` (CEF render thread).
     capture_module: Arc<Mutex<CaptureModule>>,
     /// Written from `on_ime_composition_range_changed` (CEF render thread).
-    caret_shmem: Arc<Mutex<SharedMemoryWrapper>>,
+    output_ipc: Arc<Mutex<BrowserOutputIpcChannels>>,
 }
 
 #[derive(Debug, Default)]
@@ -63,12 +63,12 @@ pub struct PaintSnapshot {
 }
 
 impl OsrRenderHandler {
-    pub fn new(
+    pub(crate) fn new(
         width: i32,
         height: i32,
         device_scale_factor: f32,
         capture_module: Arc<Mutex<CaptureModule>>,
-        caret_shmem: Arc<Mutex<SharedMemoryWrapper>>,
+        output_ipc: Arc<Mutex<BrowserOutputIpcChannels>>,
     ) -> Self {
         Self {
             width: Rc::new(RefCell::new(width)),
@@ -76,7 +76,7 @@ impl OsrRenderHandler {
             device_scale_factor,
             paint_state: Arc::new(PaintState::default()),
             capture_module,
-            caret_shmem,
+            output_ipc,
         }
     }
 
@@ -132,9 +132,14 @@ impl OsrRenderHandler {
     }
 
     fn update_caret(&self, x: i16, y: i16, height: i16) {
-        let bytes = encode_caret_payload(x, y, height);
-        if let Ok(mut shmem) = self.caret_shmem.lock() {
-            let _ = shmem.write_bytes(&bytes);
+        if let Ok(mut output) = self.output_ipc.lock() {
+            let _ = output.publish(ipc::OutputPayload::Caret(ipc::CaretOutput {
+                x: i32::from(x),
+                y: i32::from(y),
+                width: 0,
+                height: i32::from(height),
+                visible: true,
+            }));
             debug!("Caret updated: ({}, {}, h={})", x, y, height);
         }
     }

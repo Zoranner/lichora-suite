@@ -3,6 +3,7 @@
 mod cef_app;
 mod entry;
 mod handler;
+mod output;
 mod render;
 
 pub use cef_app::*;

@@ -48,12 +48,16 @@ fn input_channel_mouse_latest_overwrites_previous_position() {
         x: 10,
         y: 20,
         buttons: 1,
+        delta_x: 3,
+        delta_y: 4,
         valid: true,
     });
     input.set_mouse_latest(MouseLatest {
         x: 30,
         y: 40,
         buttons: 0,
+        delta_x: 5,
+        delta_y: -2,
         valid: true,
     });
 
@@ -63,6 +67,8 @@ fn input_channel_mouse_latest_overwrites_previous_position() {
             x: 30,
             y: 40,
             buttons: 0,
+            delta_x: 8,
+            delta_y: 2,
             valid: true,
         })
     );

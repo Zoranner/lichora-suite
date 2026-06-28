@@ -4,8 +4,9 @@
 
 #[cfg(feature = "cef")]
 mod cef_impl {
+    use crate::browser::output::BrowserOutputIpcChannels;
     use crate::browser::render::OsrRenderHandler;
-    use crate::modules::{parse_caret_console_payload, CaretModule, SurroundingTextModule};
+    use crate::modules::{parse_caret_console_payload, SurroundingTextPayload};
     use cef::*;
     use log::info;
     use std::cell::RefCell;
@@ -270,19 +271,12 @@ mod cef_impl {
 
     #[derive(Clone)]
     pub struct HeadlessDisplayHandler {
-        caret_module: Arc<Mutex<CaretModule>>,
-        surrounding_text_module: Arc<Mutex<SurroundingTextModule>>,
+        output_ipc: Arc<Mutex<BrowserOutputIpcChannels>>,
     }
 
     impl HeadlessDisplayHandler {
-        pub fn new(
-            caret_module: Arc<Mutex<CaretModule>>,
-            surrounding_text_module: Arc<Mutex<SurroundingTextModule>>,
-        ) -> Self {
-            Self {
-                caret_module,
-                surrounding_text_module,
-            }
+        pub(crate) fn new(output_ipc: Arc<Mutex<BrowserOutputIpcChannels>>) -> Self {
+            Self { output_ipc }
         }
     }
 
@@ -307,16 +301,30 @@ mod cef_impl {
 
                 if let Some(payload) = message.strip_prefix("__CARET__:") {
                     if let Some((x, y, height)) = parse_caret_console_payload(payload) {
-                        if let Ok(caret) = self.handler.caret_module.lock() {
-                            let _ = caret.write_position_with_height(x, y, height);
+                        if let Ok(mut output) = self.handler.output_ipc.lock() {
+                            let _ = output.publish(ipc::OutputPayload::Caret(ipc::CaretOutput {
+                                x: i32::from(x),
+                                y: i32::from(y),
+                                width: 0,
+                                height: i32::from(height),
+                                visible: true,
+                            }));
                         }
                     }
                     return true as _;
                 }
 
                 if let Some(payload) = message.strip_prefix("__SURROUNDING_TEXT__:") {
-                    if let Ok(mut surrounding_text) = self.handler.surrounding_text_module.lock() {
-                        let _ = surrounding_text.update_from_json(payload);
+                    if let Some(snapshot) = SurroundingTextPayload::from_json(payload) {
+                        if let Ok(mut output) = self.handler.output_ipc.lock() {
+                            let _ = output.publish(ipc::OutputPayload::SurroundingText(
+                                ipc::SurroundingTextOutput {
+                                    text: snapshot.text,
+                                    selection_start: snapshot.cursor_byte_offset as i32,
+                                    selection_end: snapshot.anchor_byte_offset as i32,
+                                },
+                            ));
+                        }
                     }
                     return true as _;
                 }
@@ -361,10 +369,9 @@ mod cef_impl {
     }
 
     impl ClientBuilder {
-        pub fn build(
+        pub(crate) fn build(
             render_handler: OsrRenderHandler,
-            caret_module: Arc<Mutex<CaretModule>>,
-            surrounding_text_module: Arc<Mutex<SurroundingTextModule>>,
+            output_ipc: Arc<Mutex<BrowserOutputIpcChannels>>,
             closed: Arc<AtomicBool>,
             browser_slot: Arc<Mutex<Option<Browser>>>,
             page_loaded: Arc<AtomicBool>,
@@ -372,10 +379,8 @@ mod cef_impl {
         ) -> Client {
             use crate::browser::render::RenderHandlerBuilder;
             let cef_render_handler = RenderHandlerBuilder::build(render_handler.clone());
-            let display_handler = DisplayHandlerBuilder::build(HeadlessDisplayHandler::new(
-                caret_module,
-                surrounding_text_module,
-            ));
+            let display_handler =
+                DisplayHandlerBuilder::build(HeadlessDisplayHandler::new(output_ipc));
             let life_span_handler =
                 LifeSpanHandlerBuilder::build(HeadlessLifeSpanHandler::new(closed, browser_slot));
             let load_handler =

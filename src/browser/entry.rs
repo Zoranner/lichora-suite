@@ -16,14 +16,14 @@ use log::{info, warn};
 #[cfg(feature = "cef")]
 use cef::*;
 
+use super::output::BrowserOutputIpcChannels;
 use super::render::OsrRenderHandler;
 #[cfg(feature = "cef")]
 use super::reveal_and_focus_for_linux;
 use crate::modules::{
-    button_flags_to_event_flags, decode_ipc_input_event, CaptureModule, CaretModule, ImeModule,
-    IpcMouseInputEvent, IpcMouseLatest, KeyboardModule, MemoryModuleBase, MouseEventModule,
-    MouseStateModule, ScriptModule, SurroundingTextModule, CARET_PROBE_SCRIPT,
-    SURROUNDING_TEXT_PROBE_SCRIPT,
+    button_flags_to_event_flags, decode_ipc_input_payload, CaptureModule, IpcImeEvent,
+    IpcInputEvent, IpcKeyboardEvent, IpcKeyboardEventType, IpcMouseInputEvent, MouseEventType,
+    ScriptModule, CARET_PROBE_SCRIPT, SURROUNDING_TEXT_PROBE_SCRIPT,
 };
 
 #[cfg(feature = "cef")]
@@ -104,16 +104,10 @@ pub struct BrowserEntry {
 
     // Output modules (render thread writes to these via Arc)
     capture_module: Option<Arc<Mutex<CaptureModule>>>,
-    caret_module: Option<Arc<Mutex<CaretModule>>>,
-    surrounding_text_module: Option<Arc<Mutex<SurroundingTextModule>>>,
+    output_ipc: Option<Arc<Mutex<BrowserOutputIpcChannels>>>,
 
     // Input modules (polled on main thread each tick)
     browser_input_ipc: Option<BrowserInputIpcChannels>,
-    keyboard_module: Option<KeyboardModule>,
-    mouse_state_module: Option<MouseStateModule>,
-    mouse_event_module: Option<MouseEventModule>,
-    ime_module: Option<ImeModule>,
-    script_module: Option<ScriptModule>,
 
     render_handler: Option<OsrRenderHandler>,
     pending_probe_at: Option<Instant>,
@@ -175,14 +169,8 @@ impl BrowserEntry {
             initialized: false,
             running: false,
             capture_module: None,
-            caret_module: None,
-            surrounding_text_module: None,
+            output_ipc: None,
             browser_input_ipc: None,
-            keyboard_module: None,
-            mouse_state_module: None,
-            mouse_event_module: None,
-            ime_module: None,
-            script_module: None,
             render_handler: None,
             pending_probe_at: None,
             repaint_loop_id: 0,
@@ -272,38 +260,9 @@ impl BrowserEntry {
         self.repaint_loop_id = self.repaint_loop_id.wrapping_add(1);
         self.pending_repaint = None;
         self.browser_input_ipc = None;
+        self.output_ipc = None;
 
-        // Shutdown input modules
-        if let Some(mut m) = self.keyboard_module.take() {
-            m.shutdown();
-        }
-        if let Some(mut m) = self.mouse_state_module.take() {
-            m.shutdown();
-        }
-        if let Some(mut m) = self.mouse_event_module.take() {
-            m.shutdown();
-        }
-        if let Some(mut m) = self.ime_module.take() {
-            m.shutdown();
-        }
-        if let Some(mut m) = self.script_module.take() {
-            m.shutdown();
-        }
-        if let Some(m) = self.capture_module.take() {
-            if let Ok(mut module) = m.lock() {
-                module.shutdown();
-            }
-        }
-        if let Some(m) = self.surrounding_text_module.take() {
-            if let Ok(mut module) = m.lock() {
-                module.shutdown();
-            }
-        }
-        if let Some(m) = self.caret_module.take() {
-            if let Ok(mut module) = m.lock() {
-                module.shutdown();
-            }
-        }
+        self.capture_module = None;
 
         #[cfg(feature = "cef")]
         {
@@ -426,45 +385,21 @@ impl BrowserEntry {
         let w = self.config.width;
         let h = self.config.height;
 
-        // Output modules — share their shmem Arcs with the render handler.
-        let capture = CaptureModule::new_shared_with_frame_channel(
-            &format!("Capture.{}", guid),
+        let capture = Arc::new(Mutex::new(CaptureModule::new_frame_channel_only(
             &session_id,
             &guid,
             w,
             h,
-        )?;
+        )?));
         self.capture_module = Some(capture.clone());
 
-        let caret = CaretModule::new(&format!("Caret.{}", guid))?;
-        let caret_shmem = caret.get_shmem();
-        let caret = Arc::new(Mutex::new(caret));
-        self.caret_module = Some(caret);
+        let output_ipc = Arc::new(Mutex::new(BrowserOutputIpcChannels::open_or_create(
+            &session_id,
+            &guid,
+        )?));
+        self.output_ipc = Some(output_ipc.clone());
 
-        let surrounding_text = Arc::new(Mutex::new(SurroundingTextModule::new(&format!(
-            "SurroundingText.{}",
-            guid
-        ))?));
-        self.surrounding_text_module = Some(surrounding_text);
-
-        // Input modules — each owns its own shmem.
-        match BrowserInputIpcChannels::open_or_create(&session_id, &guid) {
-            Ok(channels) => {
-                self.browser_input_ipc = Some(channels);
-            }
-            Err(error) => {
-                warn!(
-                    "Failed to open IPC v2 browser input channels for browser {}: {}. Legacy MouseState/MouseEvents fallback remains active.",
-                    guid, error
-                );
-                self.browser_input_ipc = None;
-            }
-        }
-        self.keyboard_module = Some(KeyboardModule::new(&format!("KeyEvent.{}", guid))?);
-        self.mouse_state_module = Some(MouseStateModule::new(&format!("MouseState.{}", guid))?);
-        self.mouse_event_module = Some(MouseEventModule::new(&format!("MouseEvents.{}", guid))?);
-        self.ime_module = Some(ImeModule::new(&format!("IME.{}", guid))?);
-        self.script_module = Some(ScriptModule::new(&format!("Script.{}", guid))?);
+        self.browser_input_ipc = Some(BrowserInputIpcChannels::open_or_create(&session_id, &guid)?);
 
         // Render handler receives the two output Arcs.
         self.render_handler = Some(OsrRenderHandler::new(
@@ -472,7 +407,7 @@ impl BrowserEntry {
             h,
             self.config.device_scale_factor,
             capture,
-            caret_shmem,
+            output_ipc,
         ));
 
         info!("All modules initialized");
@@ -539,20 +474,14 @@ impl BrowserEntry {
         };
 
         let url = CefString::from(self.config.url.as_str());
-        let caret_module = self
-            .caret_module
+        let output_ipc = self
+            .output_ipc
             .as_ref()
-            .context("Caret module not initialised before create_browser()")?
-            .clone();
-        let surrounding_text_module = self
-            .surrounding_text_module
-            .as_ref()
-            .context("SurroundingText module not initialised before create_browser()")?
+            .context("Output IPC not initialised before create_browser()")?
             .clone();
         let mut client = ClientBuilder::build(
             render_handler.clone(),
-            caret_module,
-            surrounding_text_module,
+            output_ipc,
             self.closed.clone(),
             self.browser_slot.clone(),
             self.page_loaded.clone(),
@@ -715,28 +644,8 @@ impl BrowserEntry {
         let Some(host) = browser.host() else { return };
         let mut should_probe = false;
 
-        if let Some(ref mut m) = self.keyboard_module {
-            should_probe |= m.poll(&host);
-        }
-        let mut used_ipc_input = false;
         if let Some(ref mut input) = self.browser_input_ipc {
-            used_ipc_input = input.poll(&host);
-        }
-        if !used_ipc_input {
-            if let Some(ref mut m) = self.mouse_event_module {
-                should_probe |= m.poll(&host);
-            }
-            if let Some(ref mut m) = self.mouse_state_module {
-                m.poll(&host);
-            }
-        }
-        if let (Some(ref mut ime), Some(ref keyboard)) =
-            (&mut self.ime_module, &self.keyboard_module)
-        {
-            should_probe |= ime.poll(&host, keyboard);
-        }
-        if let Some(ref mut m) = self.script_module {
-            m.poll(&browser, self.loading.load(Ordering::SeqCst));
+            should_probe |= input.poll(&host, &browser, self.loading.load(Ordering::SeqCst));
         }
 
         if should_probe {
@@ -800,21 +709,20 @@ impl BrowserInputIpcChannels {
     }
 
     #[cfg(feature = "cef")]
-    fn poll(&mut self, host: &cef::BrowserHost) -> bool {
-        let mut consumed_input = false;
+    fn poll(&mut self, host: &cef::BrowserHost, browser: &cef::Browser, is_loading: bool) -> bool {
+        let mut should_probe = false;
 
         match self.latest.try_read_latest() {
             Ok(Some(snapshot)) => {
                 if self.last_latest_commit != Some(snapshot.header.header_commit) {
                     self.last_latest_commit = Some(snapshot.header.header_commit);
                     if !snapshot.payload.is_empty() {
-                        match IpcMouseLatest::decode(&snapshot.payload) {
-                            Some(latest) if latest.valid => {
+                        match ipc::MouseLatest::decode_payload(&snapshot.payload) {
+                            Ok(latest) if latest.valid => {
                                 send_ipc_mouse_move(host, latest);
-                                consumed_input = true;
                             }
-                            Some(_) => {}
-                            None => warn!(
+                            Ok(_) => {}
+                            Err(_) => warn!(
                                 "Invalid IPC v2 mouse latest payload len={}, dropping",
                                 snapshot.payload.len()
                             ),
@@ -836,7 +744,7 @@ impl BrowserInputIpcChannels {
                 }
             };
 
-            let Some(event) = decode_ipc_input_event(item.kind, &item.payload) else {
+            let Some(event) = decode_ipc_input_payload(&item.payload) else {
                 warn!(
                     "Invalid IPC v2 input queue item kind={} sequence={} len={}, dropping",
                     item.kind,
@@ -846,11 +754,10 @@ impl BrowserInputIpcChannels {
                 continue;
             };
 
-            send_ipc_mouse_event(host, event);
-            consumed_input = true;
+            should_probe |= dispatch_ipc_input_event(host, browser, is_loading, event);
         }
 
-        consumed_input
+        should_probe
     }
 }
 
@@ -879,7 +786,7 @@ fn ipc_directory() -> std::path::PathBuf {
 }
 
 #[cfg(feature = "cef")]
-fn send_ipc_mouse_move(host: &cef::BrowserHost, latest: IpcMouseLatest) {
+fn send_ipc_mouse_move(host: &cef::BrowserHost, latest: ipc::MouseLatest) {
     use cef::{ImplBrowserHost, MouseEvent as CefMouseEvent};
 
     let mouse_ev = CefMouseEvent {
@@ -887,12 +794,31 @@ fn send_ipc_mouse_move(host: &cef::BrowserHost, latest: IpcMouseLatest) {
         y: latest.y,
         modifiers: button_flags_to_event_flags(latest.buttons),
     };
-    host.set_focus(1);
     host.send_mouse_move_event(Some(&mouse_ev), 0);
 }
 
 #[cfg(feature = "cef")]
-fn send_ipc_mouse_event(host: &cef::BrowserHost, event: IpcMouseInputEvent) {
+fn dispatch_ipc_input_event(
+    host: &cef::BrowserHost,
+    browser: &cef::Browser,
+    is_loading: bool,
+    event: IpcInputEvent,
+) -> bool {
+    match event {
+        IpcInputEvent::Mouse(event) => send_ipc_mouse_event(host, event),
+        IpcInputEvent::Keyboard(event) => send_ipc_keyboard_event(host, event),
+        IpcInputEvent::Ime(event) => send_ipc_ime_event(host, event),
+        IpcInputEvent::Script(request) => {
+            if !is_loading && !request.script.is_empty() {
+                ScriptModule::execute_script(browser, &request.script);
+            }
+            false
+        }
+    }
+}
+
+#[cfg(feature = "cef")]
+fn send_ipc_mouse_event(host: &cef::BrowserHost, event: IpcMouseInputEvent) -> bool {
     use cef::{ImplBrowserHost, MouseButtonType, MouseEvent as CefMouseEvent};
 
     match event {
@@ -900,9 +826,10 @@ fn send_ipc_mouse_event(host: &cef::BrowserHost, event: IpcMouseInputEvent) {
             let mouse_ev = CefMouseEvent {
                 x: event.x,
                 y: event.y,
-                modifiers: button_flags_to_event_flags(event.buttons),
+                modifiers: event.modifiers,
             };
             host.send_mouse_wheel_event(Some(&mouse_ev), event.delta_x, event.delta_y);
+            false
         }
         IpcMouseInputEvent::Button(event) => {
             let mouse_ev = CefMouseEvent {
@@ -911,38 +838,177 @@ fn send_ipc_mouse_event(host: &cef::BrowserHost, event: IpcMouseInputEvent) {
                 modifiers: button_flags_to_event_flags(event.buttons),
             };
             let (button, mouse_up) = match event.event_type {
-                x if x == crate::modules::MouseEventType::LeftDown as u8 => {
-                    (MouseButtonType::LEFT, 0)
-                }
-                x if x == crate::modules::MouseEventType::LeftUp as u8 => {
-                    (MouseButtonType::LEFT, 1)
-                }
-                x if x == crate::modules::MouseEventType::RightDown as u8 => {
-                    (MouseButtonType::RIGHT, 0)
-                }
-                x if x == crate::modules::MouseEventType::RightUp as u8 => {
-                    (MouseButtonType::RIGHT, 1)
-                }
-                x if x == crate::modules::MouseEventType::MiddleDown as u8 => {
-                    (MouseButtonType::MIDDLE, 0)
-                }
-                x if x == crate::modules::MouseEventType::MiddleUp as u8 => {
-                    (MouseButtonType::MIDDLE, 1)
-                }
+                x if x == MouseEventType::LeftDown as u8 => (MouseButtonType::LEFT, 0),
+                x if x == MouseEventType::LeftUp as u8 => (MouseButtonType::LEFT, 1),
+                x if x == MouseEventType::RightDown as u8 => (MouseButtonType::RIGHT, 0),
+                x if x == MouseEventType::RightUp as u8 => (MouseButtonType::RIGHT, 1),
+                x if x == MouseEventType::MiddleDown as u8 => (MouseButtonType::MIDDLE, 0),
+                x if x == MouseEventType::MiddleUp as u8 => (MouseButtonType::MIDDLE, 1),
                 other => {
                     warn!("Unknown IPC v2 mouse button event type: {}", other);
-                    return;
+                    return false;
                 }
             };
 
-            if cfg!(target_os = "linux")
-                && event.event_type == crate::modules::MouseEventType::LeftDown as u8
-            {
+            if event.event_type == MouseEventType::LeftDown as u8 {
                 host.set_focus(1);
             }
-            host.send_mouse_click_event(Some(&mouse_ev), button, mouse_up, 1);
+            host.send_mouse_click_event(Some(&mouse_ev), button, mouse_up, event.click_count);
+            event.event_type == MouseEventType::LeftUp as u8
         }
     }
+}
+
+#[cfg(feature = "cef")]
+fn send_ipc_keyboard_event(host: &cef::BrowserHost, event: IpcKeyboardEvent) -> bool {
+    use cef::{ImplBrowserHost, KeyEvent, KeyEventType};
+
+    let (type_, windows_key_code, native_key_code, character) = match event.event_type {
+        IpcKeyboardEventType::KeyDown => (
+            KeyEventType::RAWKEYDOWN,
+            event.key_code as i32,
+            event.native_key_code as i32,
+            0,
+        ),
+        IpcKeyboardEventType::KeyUp => (
+            KeyEventType::KEYUP,
+            event.key_code as i32,
+            event.native_key_code as i32,
+            0,
+        ),
+        IpcKeyboardEventType::Char => (
+            KeyEventType::CHAR,
+            event.code_point as i32,
+            0,
+            event.code_point.min(u16::MAX as u32) as u16,
+        ),
+    };
+
+    let cef_event = KeyEvent {
+        size: std::mem::size_of::<KeyEvent>(),
+        type_,
+        modifiers: key_modifiers_to_event_flags(event.modifiers),
+        windows_key_code,
+        native_key_code,
+        is_system_key: 0,
+        character,
+        unmodified_character: character,
+        focus_on_editable_field: 0,
+    };
+    host.send_key_event(Some(&cef_event));
+
+    matches!(event.event_type, IpcKeyboardEventType::Char)
+        || matches!(event.event_type, IpcKeyboardEventType::KeyUp)
+            && should_update_caret_position(event.key_code as i32, event.modifiers)
+}
+
+#[cfg(feature = "cef")]
+fn send_ipc_ime_event(host: &cef::BrowserHost, event: IpcImeEvent) -> bool {
+    match event {
+        IpcImeEvent::Composition { text, .. } => {
+            for character in text.chars() {
+                send_char_event(host, character);
+            }
+            true
+        }
+        IpcImeEvent::Commit { text } => {
+            for character in text.chars() {
+                send_char_event(host, character);
+            }
+            true
+        }
+        IpcImeEvent::Cancel => true,
+        IpcImeEvent::DeleteSurroundingText { before, after } => {
+            send_backspaces(host, before.max(0));
+            send_deletes(host, after.max(0));
+            true
+        }
+    }
+}
+
+#[cfg(feature = "cef")]
+fn send_char_event(host: &cef::BrowserHost, character: char) {
+    use cef::{ImplBrowserHost, KeyEvent, KeyEventType};
+    let character = character as u32;
+    let character = character.min(u16::MAX as u32) as u16;
+    let event = KeyEvent {
+        size: std::mem::size_of::<KeyEvent>(),
+        type_: KeyEventType::CHAR,
+        modifiers: 0,
+        windows_key_code: i32::from(character),
+        native_key_code: 0,
+        is_system_key: 0,
+        character,
+        unmodified_character: character,
+        focus_on_editable_field: 0,
+    };
+    host.send_key_event(Some(&event));
+}
+
+#[cfg(feature = "cef")]
+fn send_key_event_with_type(
+    host: &cef::BrowserHost,
+    type_: cef::KeyEventType,
+    windows_key_code: i32,
+    native_key_code: i32,
+) {
+    use cef::{ImplBrowserHost, KeyEvent};
+    let event = KeyEvent {
+        size: std::mem::size_of::<KeyEvent>(),
+        type_,
+        modifiers: 0,
+        windows_key_code,
+        native_key_code,
+        is_system_key: 0,
+        character: 0,
+        unmodified_character: 0,
+        focus_on_editable_field: 0,
+    };
+    host.send_key_event(Some(&event));
+}
+
+#[cfg(feature = "cef")]
+fn send_backspaces(host: &cef::BrowserHost, count: i32) {
+    for _ in 0..count {
+        send_key_event_with_type(host, cef::KeyEventType::RAWKEYDOWN, 0x08, 0x08);
+        send_char_event(host, '\u{0008}');
+        send_key_event_with_type(host, cef::KeyEventType::KEYUP, 0x08, 0x08);
+    }
+}
+
+#[cfg(feature = "cef")]
+fn send_deletes(host: &cef::BrowserHost, count: i32) {
+    for _ in 0..count {
+        send_key_event_with_type(host, cef::KeyEventType::RAWKEYDOWN, 0x2E, 0x2E);
+        send_key_event_with_type(host, cef::KeyEventType::KEYUP, 0x2E, 0x2E);
+    }
+}
+
+fn key_modifiers_to_event_flags(modifiers: u32) -> u32 {
+    let mut flags = 0;
+    if modifiers & 0x01 != 0 {
+        flags |= 4;
+    }
+    if modifiers & 0x02 != 0 {
+        flags |= 2;
+    }
+    if modifiers & 0x04 != 0 {
+        flags |= 8;
+    }
+    flags
+}
+
+fn should_update_caret_position(windows_key_code: i32, modifiers: u32) -> bool {
+    match windows_key_code {
+        0x25 | 0x26 | 0x27 | 0x28 | 0x24 | 0x23 | 0x21 | 0x22 | 0x09 | 0x08 | 0x2E | 0x0D => {
+            return true;
+        }
+        _ => {}
+    }
+    if modifiers & 0x01 != 0 {
+        return matches!(windows_key_code, 0x41 | 0x56 | 0x58 | 0x5A | 0x59);
+    }
+    false
 }
 
 fn cache_path() -> String {

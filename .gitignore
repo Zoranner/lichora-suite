@@ -12,6 +12,7 @@
 Thumbs.db
 
 # Build artifacts
+/dist/
 *.pdb
 
 # Runtime logs generated beside packaged CEF runtime

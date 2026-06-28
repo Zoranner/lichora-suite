@@ -11,6 +11,7 @@ members = [".", "crates/ipc", "crates/ipc_native"]
 resolver = "2"
 
 [lib]
+name = "headless_browser_core"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
@@ -25,7 +26,7 @@ cef = ["dep:cef"]
 # CEF bindings
 cef = { version = "145", optional = true }
 
-# File-backed memory maps for IPC with the Unity MemoryStacks package
+# File-backed memory maps for EmbeddedBrowser IPC v2
 memmap2 = "0.9"
 
 # Async runtime

@@ -84,7 +84,11 @@ if ($LASTEXITCODE -eq 0) {
     }
 
     $BinaryPath = Join-Path $TargetDir "headless_browser.exe"
-    $PdbPath = Join-Path $TargetDir "headless_browser.pdb"
+    $PdbPaths = @(
+        (Join-Path $TargetDir "headless_browser.pdb"),
+        (Join-Path $TargetDir "headless_browser_core.pdb"),
+        (Join-Path $TargetDir "ipc_native.pdb")
+    )
     $IpcNativePath = Join-Path $TargetDir "ipc_native.dll"
     $IpcNativeOutputName = "browser_ipc_native.dll"
     $UnityPluginDir = Join-Path $PSScriptRoot "..\BrowserRenderer\Assets\Packages\Plugins\Windows"
@@ -95,8 +99,10 @@ if ($LASTEXITCODE -eq 0) {
         Copy-Item -Path $BinaryPath -Destination (Join-Path $DistDir "headless_browser.exe") -Force
         Write-Host "Copied executable to: $DistDir" -ForegroundColor Green
     }
-    if (Test-Path $PdbPath) {
-        Copy-Item -Path $PdbPath -Destination (Join-Path $DistDir "headless_browser.pdb") -Force
+    foreach ($PdbPath in $PdbPaths) {
+        if (Test-Path $PdbPath) {
+            Copy-Item -Path $PdbPath -Destination (Join-Path $DistDir (Split-Path $PdbPath -Leaf)) -Force
+        }
     }
     if (Test-Path $IpcNativePath) {
         New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
@@ -104,8 +110,15 @@ if ($LASTEXITCODE -eq 0) {
         Write-Host "Copied IPC native DLL to: $DistDir\$IpcNativeOutputName" -ForegroundColor Green
 
         if (Test-Path $UnityPluginDir) {
-            Copy-Item -Path $IpcNativePath -Destination (Join-Path $UnityPluginDir $IpcNativeOutputName) -Force
-            Write-Host "Copied IPC native DLL to Unity plugin dir: $UnityPluginDir\$IpcNativeOutputName" -ForegroundColor Green
+            $UnityPluginPath = Join-Path $UnityPluginDir $IpcNativeOutputName
+            try {
+                Copy-Item -Path $IpcNativePath -Destination $UnityPluginPath -Force
+                Write-Host "Copied IPC native DLL to Unity plugin dir: $UnityPluginPath" -ForegroundColor Green
+            } catch {
+                Write-Host "Warning: IPC native DLL was built and copied to dist, but Unity plugin DLL could not be updated." -ForegroundColor Yellow
+                Write-Host "Path: $UnityPluginPath" -ForegroundColor Yellow
+                Write-Host "Reason: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
         } else {
             Write-Host "Unity plugin dir not found; IPC native DLL was not copied to BrowserRenderer." -ForegroundColor Yellow
         }

@@ -20,7 +20,7 @@ cargo build --release
 
 echo ""
 echo "=== Build Complete ==="
-echo "Binary: target/release/headless_browser_rust"
+echo "Binary: target/release/headless_browser"
 echo ""
 
 # Optional: Create distribution package

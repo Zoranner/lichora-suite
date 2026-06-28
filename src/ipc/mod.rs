@@ -1,5 +1,4 @@
-//! IPC module - Inter-process communication
-
-mod shared_memory;
-
-pub use shared_memory::SharedMemoryWrapper;
+//! IPC module - Inter-process communication.
+//!
+//! The current runtime uses the shared `ipc` crate directly. This module is
+//! kept as a namespace for browser-local IPC helpers.

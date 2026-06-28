@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use headless_browser_rust::browser::{BrowserEntry, BrowserConfig};
+//! use headless_browser_core::browser::{BrowserEntry, BrowserConfig};
 //!
 //! let config = BrowserConfig {
 //!     width: 1280,

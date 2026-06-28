@@ -191,16 +191,10 @@ impl FrameChannel {
         let mut frame_header = self.frame_header();
         frame_header.submitted_paint_count = frame_header.submitted_paint_count.saturating_add(1);
 
-        if self.should_drop_same_size_waiting_for_ack(&frame_header, width, height) {
-            let mut header = self.begin_commit();
-            frame_header.dropped_paint_count = frame_header.dropped_paint_count.saturating_add(1);
-            self.write_frame_header(&frame_header);
-            header.consumer_ack = frame_header.acknowledged_frame;
-            self.finish_commit(header)?;
-            return Ok(FramePublishResult::Dropped);
-        }
-
         let mut header = self.begin_commit();
+        if self.should_replace_unacknowledged_latest(&frame_header, width, height) {
+            frame_header.dropped_paint_count = frame_header.dropped_paint_count.saturating_add(1);
+        }
 
         let frame_type = if frame_header.frame_sequence != 0
             && (frame_header.width != width as i32 || frame_header.height != height as i32)
@@ -212,9 +206,6 @@ impl FrameChannel {
         let slot_index = (frame_header.current_slot as usize + 1) % self.slot_count;
         let payload_bytes = pixels.len().min(self.slot_size);
         self.slot_mut(slot_index)[..payload_bytes].copy_from_slice(&pixels[..payload_bytes]);
-        if payload_bytes < self.slot_size {
-            self.slot_mut(slot_index)[payload_bytes..].fill(0);
-        }
 
         frame_header.width = width as i32;
         frame_header.height = height as i32;
@@ -365,7 +356,7 @@ impl FrameChannel {
         Ok(())
     }
 
-    fn should_drop_same_size_waiting_for_ack(
+    fn should_replace_unacknowledged_latest(
         &self,
         frame_header: &FrameHeader,
         width: u32,
@@ -462,9 +453,8 @@ impl FrameRingState {
     ) -> FramePublishResult {
         self.submitted_count = self.submitted_count.saturating_add(1);
 
-        if self.should_drop_same_size_waiting_for_ack(width, height) {
+        if self.should_replace_unacknowledged_latest(width, height) {
             self.dropped_count = self.dropped_count.saturating_add(1);
-            return FramePublishResult::Dropped;
         }
 
         let frame_type = match self.latest_dimensions() {
@@ -516,7 +506,7 @@ impl FrameRingState {
         self.dropped_count
     }
 
-    fn should_drop_same_size_waiting_for_ack(&self, width: u32, height: u32) -> bool {
+    fn should_replace_unacknowledged_latest(&self, width: u32, height: u32) -> bool {
         let Some(latest) = self.latest_frame() else {
             return false;
         };

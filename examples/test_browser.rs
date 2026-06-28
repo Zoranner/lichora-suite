@@ -2,7 +2,7 @@
 //!
 //! Basic test to verify browser initialization
 
-use headless_browser::browser::BrowserEntry;
+use headless_browser_core::browser::BrowserEntry;
 
 fn main() {
     // Initialize logger

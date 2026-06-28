@@ -34,11 +34,11 @@ dist/win-x64/
 
 ## Unity handler 运行模型
 
-Unity 集成不再按每个浏览器启动一个 `--guid --url` 进程。新主线是 IPC v2 session 模型：
+Unity 集成按 IPC v2 session 模型运行：
 
 - Unity 启动一个 handler 进程，首个非选项参数为 session 或 handler GUID。
 - Browser 进程创建项目自有 IPC session。
-- 管理命令走 `control` queue，不再使用单槽 flag。
+- 管理命令走 `control` queue。
 - 鼠标移动走 latest-only，点击、滚轮、键盘、IME 和脚本请求走 typed input queue。
 - Capture 走 `FrameRing`，状态诊断走 `status` page。
 
@@ -50,20 +50,17 @@ Unity 集成不再按每个浏览器启动一个 `--guid --url` 进程。新主�
 
 ## 模块边界
 
-- `src/main.rs`：CLI、handler loop、heartbeat watchdog 和 Unity 管理命令分发。
+- `src/main.rs`：CLI、handler loop、Unity 管理命令分发，以及对旧 heartbeat 参数的忽略式兼容解析。
 - `src/browser/`：CEF app/client、浏览器实例生命周期、OSR render handler。
 - `src/modules/`：浏览器输入、输出和 capture 的业务适配层。
-- `src/ipc/`：IPC v2 runtime，包括 mmap、header、queue、latest slot、frame ring 和 status page。
-- `src/protocol/`：IPC v2 typed payload、命令、事件和 frame 结构。
+- `src/ipc/`：IPC v2 runtime 适配层。
+- `crates/ipc/`：共享 IPC core，包括 mmap、header、queue、latest slot、frame ring、typed payload 和 status/output payload。
+- `crates/ipc_native/`：Unity 原生插件 C ABI；typed browser handle 是输入、帧和输出热路径的唯一接口，旧 `*_for_browser` session-handle 导出不再保留。
 
 文档和发布治理改动不应顺手修改 `src`。协议行为变更必须同时更新 `PROTOCOL.md` 和 `../docs/design/architecture.md`。
 
 ## IPC v2 开发约束
 
-- 不兼容旧 MemoryStacks payload。
-- 不再使用 `MemoryStacks_` 文件前缀。
-- 不再使用 4 字节大端 length envelope。
-- 不再使用首字节 flag 表示事件可用。
 - 不在业务模块手写 offset；offset 必须封装在 typed protocol 或 IPC runtime 中。
 - 所有跨进程共享结构使用 little-endian。
 - 每个通道必须有 version、channel kind、sequence/ack 或 seqlock 提交语义。

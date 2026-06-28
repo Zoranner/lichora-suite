@@ -9,6 +9,7 @@ pub mod control;
 pub mod frame;
 pub mod queue;
 pub mod status;
+pub mod typed_payload;
 
 pub use control::{ControlCommand, ControlDecodeError};
 pub use frame::{
@@ -19,6 +20,12 @@ pub use queue::{MappedQueueError, MappedQueueItem, MappedQueueSpec, MappedSpscQu
 pub use status::{
     BrowserState, OutputEvent, OutputEventKind, OutputQueueState, ProcessState, StatusCounters,
     StatusSnapshot,
+};
+pub use typed_payload::{
+    CaretOutput, ImeCompositionInput, InputPayload, InputPayloadDecodeError, InputPayloadKind,
+    KeyboardKeyInput, MouseButtonInput, MouseWheelInput, OutputPayload, OutputPayloadDecodeError,
+    OutputPayloadKind, PageEventOutput, ScriptRequestInput, ScriptResultOutput,
+    SurroundingTextOutput,
 };
 
 pub const CHANNEL_MAGIC: u32 = 0x3249_4245;
@@ -411,7 +418,37 @@ pub struct MouseLatest {
     pub x: i32,
     pub y: i32,
     pub buttons: u32,
+    pub delta_x: i32,
+    pub delta_y: i32,
     pub valid: bool,
+}
+
+impl MouseLatest {
+    pub const PAYLOAD_SIZE: usize = 24;
+
+    pub fn encode_payload(&self) -> [u8; Self::PAYLOAD_SIZE] {
+        let mut payload = [0u8; Self::PAYLOAD_SIZE];
+        payload[0..4].copy_from_slice(&self.x.to_le_bytes());
+        payload[4..8].copy_from_slice(&self.y.to_le_bytes());
+        payload[8..12].copy_from_slice(&self.buttons.to_le_bytes());
+        payload[12..16].copy_from_slice(&self.delta_x.to_le_bytes());
+        payload[16..20].copy_from_slice(&self.delta_y.to_le_bytes());
+        payload[20] = u8::from(self.valid);
+        payload
+    }
+
+    pub fn decode_payload(buffer: &[u8]) -> Result<Self, DecodeError> {
+        require_len(buffer, Self::PAYLOAD_SIZE)?;
+
+        Ok(Self {
+            x: read_i32(buffer, 0),
+            y: read_i32(buffer, 4),
+            buttons: read_u32(buffer, 8),
+            delta_x: read_i32(buffer, 12),
+            delta_y: read_i32(buffer, 16),
+            valid: buffer[20] != 0,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -464,10 +501,19 @@ impl InputChannelState {
     }
 
     pub fn set_mouse_latest(&mut self, mouse: MouseLatest) {
-        if self.mouse_latest.is_some() {
+        if let Some(previous) = self.mouse_latest {
             self.metadata.merged_count = self.metadata.merged_count.saturating_add(1);
+            self.mouse_latest = Some(MouseLatest {
+                x: mouse.x,
+                y: mouse.y,
+                buttons: mouse.buttons,
+                delta_x: previous.delta_x.saturating_add(mouse.delta_x),
+                delta_y: previous.delta_y.saturating_add(mouse.delta_y),
+                valid: mouse.valid,
+            });
+        } else {
+            self.mouse_latest = Some(mouse);
         }
-        self.mouse_latest = Some(mouse);
     }
 
     pub fn mouse_latest(&self) -> Option<MouseLatest> {

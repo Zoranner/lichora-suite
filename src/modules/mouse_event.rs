@@ -1,17 +1,15 @@
-//! Mouse Event Module - Handles mouse clicks and scroll events from Unity
-//!
-//! Protocol: 10 bytes max
-//! [flag(1), eventType(1), x(2), y(2), deltaX(2), deltaY(2)]
+//! IPC v2 typed input decoding for browser interaction.
 
-use anyhow::Result;
-use log::{debug, warn};
-
-use super::base::MemoryModuleBase;
-use super::protocol::{MouseEvent, MouseEventType};
-use crate::ipc::SharedMemoryWrapper;
-
-pub(crate) const IPC_INPUT_KIND_MOUSE_BUTTON: u32 = 1;
-pub(crate) const IPC_INPUT_KIND_MOUSE_WHEEL: u32 = 2;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MouseEventType {
+    LeftDown = 1,
+    LeftUp = 2,
+    RightDown = 3,
+    RightUp = 4,
+    MiddleDown = 5,
+    MiddleUp = 6,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IpcMouseButtonEvent {
@@ -19,6 +17,7 @@ pub(crate) struct IpcMouseButtonEvent {
     pub x: i32,
     pub y: i32,
     pub buttons: u32,
+    pub click_count: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,7 +26,7 @@ pub(crate) struct IpcMouseWheelEvent {
     pub y: i32,
     pub delta_x: i32,
     pub delta_y: i32,
-    pub buttons: u32,
+    pub modifiers: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,192 +35,229 @@ pub(crate) enum IpcMouseInputEvent {
     Wheel(IpcMouseWheelEvent),
 }
 
-/// Mouse event module (click + scroll queue)
-pub struct MouseEventModule {
-    memory_name: String,
-    shmem: SharedMemoryWrapper,
-    running: bool,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IpcKeyboardEvent {
+    pub event_type: IpcKeyboardEventType,
+    pub key_code: u32,
+    pub native_key_code: u32,
+    pub modifiers: u32,
+    pub code_point: u32,
 }
 
-impl MouseEventModule {
-    pub fn new(memory_name: &str) -> Result<Self> {
-        let mut shmem = SharedMemoryWrapper::new(memory_name, MouseEvent::SIZE);
-        shmem.initialize()?;
-        Ok(Self {
-            memory_name: memory_name.to_string(),
-            shmem,
-            running: true,
-        })
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IpcKeyboardEventType {
+    KeyDown,
+    KeyUp,
+    Char,
+}
 
-    fn read_event(&mut self) -> Option<MouseEvent> {
-        let data = self.shmem.read_bytes().ok()?;
-        if data.len() < 6 || data[0] != 1 {
-            return None;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum IpcImeEvent {
+    Composition {
+        text: String,
+        selection_start: i32,
+        selection_end: i32,
+    },
+    Commit {
+        text: String,
+    },
+    Cancel,
+    DeleteSurroundingText {
+        before: i32,
+        after: i32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum IpcInputEvent {
+    Mouse(IpcMouseInputEvent),
+    Keyboard(IpcKeyboardEvent),
+    Ime(IpcImeEvent),
+    Script(ipc::ScriptRequestInput),
+}
+
+pub(crate) fn decode_ipc_input_payload(payload: &[u8]) -> Option<IpcInputEvent> {
+    match ipc::InputPayload::decode(payload).ok()? {
+        ipc::InputPayload::MouseButton(input) => Some(IpcInputEvent::Mouse(
+            IpcMouseInputEvent::Button(IpcMouseButtonEvent {
+                event_type: mouse_button_event_type(input.button, input.pressed)?,
+                x: input.x,
+                y: input.y,
+                buttons: input.buttons,
+                click_count: i32::from(input.click_count.max(1)),
+            }),
+        )),
+        ipc::InputPayload::MouseWheel(input) => Some(IpcInputEvent::Mouse(
+            IpcMouseInputEvent::Wheel(IpcMouseWheelEvent {
+                x: input.x,
+                y: input.y,
+                delta_x: input.delta_x,
+                delta_y: input.delta_y,
+                modifiers: input.modifiers,
+            }),
+        )),
+        ipc::InputPayload::KeyboardKeyDown(input) => {
+            Some(IpcInputEvent::Keyboard(IpcKeyboardEvent {
+                event_type: IpcKeyboardEventType::KeyDown,
+                key_code: input.key_code,
+                native_key_code: input.native_key_code,
+                modifiers: input.modifiers,
+                code_point: 0,
+            }))
         }
-        let event = MouseEvent::from_bytes(&data)?;
-        let _ = self.shmem.write_byte_at(0, 0);
-        Some(event)
-    }
-
-    /// Poll shared memory and forward any pending mouse event to the CEF browser host.
-    #[cfg(feature = "cef")]
-    pub fn poll(&mut self, host: &cef::BrowserHost) -> bool {
-        use cef::{ImplBrowserHost, MouseButtonType, MouseEvent as CefMouseEvent};
-
-        let Some(event) = self.read_event() else {
-            return false;
-        };
-
-        let mouse_ev = CefMouseEvent {
-            x: event.x as i32,
-            y: event.y as i32,
-            modifiers: 0,
-        };
-
-        if event.event_type == MouseEventType::Scroll as u8 {
-            debug!(
-                "Mouse scroll: ({},{}) delta=({},{})",
-                event.x, event.y, event.delta_x, event.delta_y
-            );
-            host.send_mouse_wheel_event(
-                Some(&mouse_ev),
-                event.delta_x as i32,
-                event.delta_y as i32,
-            );
-            return false;
+        ipc::InputPayload::KeyboardKeyUp(input) => {
+            Some(IpcInputEvent::Keyboard(IpcKeyboardEvent {
+                event_type: IpcKeyboardEventType::KeyUp,
+                key_code: input.key_code,
+                native_key_code: input.native_key_code,
+                modifiers: input.modifiers,
+                code_point: 0,
+            }))
         }
-
-        let (button, mouse_up) = match event.event_type {
-            x if x == MouseEventType::LeftDown as u8 => (MouseButtonType::LEFT, 0),
-            x if x == MouseEventType::LeftUp as u8 => (MouseButtonType::LEFT, 1),
-            x if x == MouseEventType::RightDown as u8 => (MouseButtonType::RIGHT, 0),
-            x if x == MouseEventType::RightUp as u8 => (MouseButtonType::RIGHT, 1),
-            x if x == MouseEventType::MiddleDown as u8 => (MouseButtonType::MIDDLE, 0),
-            x if x == MouseEventType::MiddleUp as u8 => (MouseButtonType::MIDDLE, 1),
-            other => {
-                warn!("Unknown mouse event type: {}", other);
-                return false;
-            }
-        };
-
-        if cfg!(target_os = "linux") && event.event_type == MouseEventType::LeftDown as u8 {
-            host.set_focus(1);
+        ipc::InputPayload::KeyboardChar {
+            code_point,
+            modifiers,
+        } => Some(IpcInputEvent::Keyboard(IpcKeyboardEvent {
+            event_type: IpcKeyboardEventType::Char,
+            key_code: code_point,
+            native_key_code: 0,
+            modifiers,
+            code_point,
+        })),
+        ipc::InputPayload::ImeComposition(input) => {
+            Some(IpcInputEvent::Ime(IpcImeEvent::Composition {
+                text: input.text,
+                selection_start: input.selection_start,
+                selection_end: input.selection_end,
+            }))
         }
-
-        debug!(
-            "Mouse click: ({},{}) button={:?} up={}",
-            event.x, event.y, button, mouse_up
-        );
-        host.send_mouse_click_event(Some(&mouse_ev), button, mouse_up, 1);
-        event.event_type == MouseEventType::LeftUp as u8
+        ipc::InputPayload::ImeCommit { text } => {
+            Some(IpcInputEvent::Ime(IpcImeEvent::Commit { text }))
+        }
+        ipc::InputPayload::ImeCancel => Some(IpcInputEvent::Ime(IpcImeEvent::Cancel)),
+        ipc::InputPayload::ImeDeleteSurroundingText { before, after } => {
+            Some(IpcInputEvent::Ime(IpcImeEvent::DeleteSurroundingText {
+                before,
+                after,
+            }))
+        }
+        ipc::InputPayload::ScriptRequest(input) => Some(IpcInputEvent::Script(input)),
     }
 }
 
-pub(crate) fn decode_ipc_input_event(kind: u32, payload: &[u8]) -> Option<IpcMouseInputEvent> {
-    match kind {
-        IPC_INPUT_KIND_MOUSE_BUTTON => {
-            decode_ipc_mouse_button_event(payload).map(IpcMouseInputEvent::Button)
-        }
-        IPC_INPUT_KIND_MOUSE_WHEEL => {
-            decode_ipc_mouse_wheel_event(payload).map(IpcMouseInputEvent::Wheel)
-        }
-        _ => None,
-    }
+fn mouse_button_event_type(button: u32, pressed: bool) -> Option<u8> {
+    let event_type = match (button, pressed) {
+        (1, true) => MouseEventType::LeftDown,
+        (1, false) => MouseEventType::LeftUp,
+        (2, true) => MouseEventType::RightDown,
+        (2, false) => MouseEventType::RightUp,
+        (3, true) => MouseEventType::MiddleDown,
+        (3, false) => MouseEventType::MiddleUp,
+        _ => return None,
+    };
+    Some(event_type as u8)
 }
 
-fn decode_ipc_mouse_button_event(payload: &[u8]) -> Option<IpcMouseButtonEvent> {
-    if payload.len() < 13 {
-        return None;
-    }
+pub(crate) fn button_flags_to_event_flags(button_state: u32) -> u32 {
+    const EVENTFLAG_LEFT_MOUSE_BUTTON: u32 = 16;
+    const EVENTFLAG_MIDDLE_MOUSE_BUTTON: u32 = 32;
+    const EVENTFLAG_RIGHT_MOUSE_BUTTON: u32 = 64;
 
-    Some(IpcMouseButtonEvent {
-        event_type: payload[0],
-        x: i32::from_le_bytes(payload[1..5].try_into().ok()?),
-        y: i32::from_le_bytes(payload[5..9].try_into().ok()?),
-        buttons: u32::from_le_bytes(payload[9..13].try_into().ok()?),
-    })
-}
-
-fn decode_ipc_mouse_wheel_event(payload: &[u8]) -> Option<IpcMouseWheelEvent> {
-    if payload.len() < 20 {
-        return None;
+    let mut modifiers: u32 = 0;
+    if button_state & 0x01 != 0 {
+        modifiers |= EVENTFLAG_LEFT_MOUSE_BUTTON;
     }
-
-    Some(IpcMouseWheelEvent {
-        x: i32::from_le_bytes(payload[0..4].try_into().ok()?),
-        y: i32::from_le_bytes(payload[4..8].try_into().ok()?),
-        delta_x: i32::from_le_bytes(payload[8..12].try_into().ok()?),
-        delta_y: i32::from_le_bytes(payload[12..16].try_into().ok()?),
-        buttons: u32::from_le_bytes(payload[16..20].try_into().ok()?),
-    })
-}
-
-impl MemoryModuleBase for MouseEventModule {
-    fn get_memory_name(&self) -> &str {
-        &self.memory_name
+    if button_state & 0x02 != 0 {
+        modifiers |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
     }
-    fn initialize(&mut self) -> Result<()> {
-        Ok(())
+    if button_state & 0x04 != 0 {
+        modifiers |= EVENTFLAG_MIDDLE_MOUSE_BUTTON;
     }
-    fn shutdown(&mut self) {
-        self.running = false;
-    }
-    fn is_running(&self) -> bool {
-        self.running
-    }
+    modifiers
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_ipc_input_event, IpcMouseButtonEvent, IpcMouseInputEvent, IpcMouseWheelEvent,
+        decode_ipc_input_payload, IpcInputEvent, IpcMouseButtonEvent, IpcMouseInputEvent,
+        IpcMouseWheelEvent, MouseEventType,
     };
-    use crate::modules::protocol::MouseEventType;
+    use ipc::{
+        InputPayload, KeyboardKeyInput, MouseButtonInput, MouseWheelInput, ScriptRequestInput,
+    };
 
     #[test]
-    fn decodes_ipc_v2_mouse_button_payload() {
-        let mut payload = Vec::new();
-        payload.push(MouseEventType::LeftDown as u8);
-        payload.extend_from_slice(&10i32.to_le_bytes());
-        payload.extend_from_slice(&20i32.to_le_bytes());
-        payload.extend_from_slice(&1u32.to_le_bytes());
+    fn decodes_ipc_v2_typed_mouse_button_payload() {
+        let payload = InputPayload::MouseButton(MouseButtonInput {
+            x: 10,
+            y: 20,
+            button: 1,
+            buttons: 1,
+            pressed: true,
+            click_count: 2,
+            modifiers: 0,
+        })
+        .encode();
 
-        let event = decode_ipc_input_event(1, &payload).unwrap();
+        let event = decode_ipc_input_payload(&payload).unwrap();
 
         assert_eq!(
-            IpcMouseInputEvent::Button(IpcMouseButtonEvent {
+            IpcInputEvent::Mouse(IpcMouseInputEvent::Button(IpcMouseButtonEvent {
                 event_type: MouseEventType::LeftDown as u8,
                 x: 10,
                 y: 20,
                 buttons: 1,
-            }),
+                click_count: 2,
+            })),
             event
         );
-        assert!(decode_ipc_input_event(1, &payload[..8]).is_none());
+        assert!(decode_ipc_input_payload(&payload[..8]).is_none());
     }
 
     #[test]
-    fn decodes_ipc_v2_mouse_wheel_payload() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&10i32.to_le_bytes());
-        payload.extend_from_slice(&20i32.to_le_bytes());
-        payload.extend_from_slice(&(-3i32).to_le_bytes());
-        payload.extend_from_slice(&120i32.to_le_bytes());
-        payload.extend_from_slice(&2u32.to_le_bytes());
+    fn decodes_ipc_v2_typed_mouse_wheel_payload() {
+        let payload = InputPayload::MouseWheel(MouseWheelInput {
+            x: 10,
+            y: 20,
+            delta_x: -3,
+            delta_y: 120,
+            modifiers: 2,
+        })
+        .encode();
 
-        let event = decode_ipc_input_event(2, &payload).unwrap();
+        let event = decode_ipc_input_payload(&payload).unwrap();
 
         assert_eq!(
-            IpcMouseInputEvent::Wheel(IpcMouseWheelEvent {
+            IpcInputEvent::Mouse(IpcMouseInputEvent::Wheel(IpcMouseWheelEvent {
                 x: 10,
                 y: 20,
                 delta_x: -3,
                 delta_y: 120,
-                buttons: 2,
-            }),
+                modifiers: 2,
+            })),
             event
         );
-        assert!(decode_ipc_input_event(2, &payload[..16]).is_none());
+        assert!(decode_ipc_input_payload(&payload[..16]).is_none());
+    }
+
+    #[test]
+    fn decodes_ipc_v2_non_mouse_payloads_without_legacy_queue_kind() {
+        assert!(decode_ipc_input_payload(
+            &InputPayload::KeyboardKeyDown(KeyboardKeyInput {
+                key_code: 65,
+                native_key_code: 30,
+                modifiers: 4,
+            })
+            .encode()
+        )
+        .is_some());
+        assert!(decode_ipc_input_payload(
+            &InputPayload::ScriptRequest(ScriptRequestInput {
+                request_id: 7,
+                script: "window.__probe = true".to_string(),
+            })
+            .encode()
+        )
+        .is_some());
     }
 }
