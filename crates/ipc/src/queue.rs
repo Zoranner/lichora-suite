@@ -361,12 +361,7 @@ impl MappedSpscQueue {
     }
 
     fn flush(&mut self) -> MappedQueueResult<()> {
-        self.mmap
-            .flush_async()
-            .map_err(|source| MappedQueueError::Io {
-                path: self.path.clone(),
-                source,
-            })
+        Ok(())
     }
 }
 

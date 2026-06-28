@@ -36,6 +36,7 @@ const MAX_HEIGHT: i32 = 1440;
 const REPAINT_MAX_ATTEMPTS: u8 = 12;
 const REPAINT_DELAY: Duration = Duration::from_millis(33);
 const CLOSE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+const INPUT_QUEUE_MAX_EVENTS_PER_POLL: usize = 64;
 
 /// Configuration for a browser instance.
 #[derive(Clone)]
@@ -731,10 +732,10 @@ impl BrowserInputIpcChannels {
             Err(error) => warn!("Failed to read IPC v2 mouse latest channel: {error}"),
         }
 
-        loop {
+        for _ in 0..INPUT_QUEUE_MAX_EVENTS_PER_POLL {
             let item = match self.queue.try_pop() {
                 Ok(Some(item)) => item,
-                Ok(None) => break,
+                Ok(None) => return should_probe,
                 Err(error) => {
                     warn!("Failed to read IPC v2 input queue item: {error}");
                     break;

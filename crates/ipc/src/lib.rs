@@ -477,10 +477,7 @@ impl ChannelMappedFile {
     }
 
     fn flush(&mut self) -> IpcResult<()> {
-        self.mmap.flush_async().map_err(|source| IpcError::Io {
-            path: self.path.clone(),
-            source,
-        })
+        Ok(())
     }
 }
 

@@ -408,12 +408,7 @@ impl FrameChannel {
     }
 
     fn flush(&mut self) -> FrameCopyResultType<()> {
-        self.mmap
-            .flush_async()
-            .map_err(|source| FrameCopyError::Io {
-                path: self.path.clone(),
-                source,
-            })
+        Ok(())
     }
 }
 
