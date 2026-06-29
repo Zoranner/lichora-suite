@@ -514,10 +514,17 @@ impl GraphicsModeProfile {
 }
 
 fn parse_args() -> CliArgs {
-    parse_args_from(std::env::args().collect())
+    match parse_args_from(std::env::args().collect()) {
+        Ok(args) => args,
+        Err(error) => {
+            error!("{error}");
+            print_usage();
+            std::process::exit(2);
+        }
+    }
 }
 
-fn parse_args_from(args: Vec<String>) -> CliArgs {
+fn parse_args_from(args: Vec<String>) -> Result<CliArgs, String> {
     let args = expand_packed_arguments(args);
 
     let mut result = CliArgs {
@@ -585,12 +592,6 @@ fn parse_args_from(args: Vec<String>) -> CliArgs {
                     i += 1;
                 }
             }
-            "--heartbeat-timeout-ms" => {
-                i += usize::from(i + 1 < args.len());
-            }
-            "--heartbeat-stall-grace-ms" => {
-                i += usize::from(i + 1 < args.len());
-            }
             "--help" => {
                 print_usage();
                 std::process::exit(0);
@@ -599,8 +600,9 @@ fn parse_args_from(args: Vec<String>) -> CliArgs {
                 result.graphics_mode_request =
                     GraphicsModeRequest::parse(&value["--graphics-mode=".len()..]);
             }
-            value if value.starts_with("--heartbeat-timeout-ms=") => {}
-            value if value.starts_with("--heartbeat-stall-grace-ms=") => {}
+            value if value.starts_with('-') => {
+                return Err(format!("unknown option: {value}"));
+            }
             value => {
                 if !value.starts_with('-') && is_first_non_option(&args, i) {
                     if looks_like_guid(&args[i]) {
@@ -617,7 +619,7 @@ fn parse_args_from(args: Vec<String>) -> CliArgs {
     }
 
     result.graphics_mode = GraphicsModeProfile::resolve(result.graphics_mode_request);
-    result
+    Ok(result)
 }
 
 fn expand_packed_arguments(args: Vec<String>) -> Vec<String> {
@@ -665,8 +667,6 @@ fn option_consumes_next_value(arg: &str) -> bool {
             | "--fps"
             | "-f"
             | "--graphics-mode"
-            | "--heartbeat-timeout-ms"
-            | "--heartbeat-stall-grace-ms"
     )
 }
 
@@ -817,10 +817,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_packed_handler_graphics_arguments_and_ignores_legacy_heartbeat_flags() {
+    fn parses_packed_handler_graphics_arguments() {
         let args = parse_args_from(test_args(&[
-            "12345678-1234-1234-1234-123456789abc --graphics-mode=off --heartbeat-timeout-ms 1500 --heartbeat-stall-grace-ms=2500",
-        ]));
+            "12345678-1234-1234-1234-123456789abc --graphics-mode=off",
+        ]))
+        .unwrap();
 
         assert!(args.unity_handler_mode);
         assert_eq!(args.guid, "12345678-1234-1234-1234-123456789abc");
@@ -828,16 +829,34 @@ mod tests {
     }
 
     #[test]
-    fn parses_graphics_mode_on_and_keeps_legacy_heartbeat_flags_out_of_url() {
+    fn rejects_legacy_heartbeat_flags() {
+        let error = match parse_args_from(test_args(&[
+            "12345678-1234-1234-1234-123456789abc",
+            "--heartbeat-timeout-ms",
+            "1500",
+        ])) {
+            Ok(_) => panic!("legacy heartbeat timeout flag should be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, "unknown option: --heartbeat-timeout-ms");
+
+        let error = match parse_args_from(test_args(&["--heartbeat-stall-grace-ms=2500"])) {
+            Ok(_) => panic!("legacy heartbeat stall grace flag should be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, "unknown option: --heartbeat-stall-grace-ms=2500");
+    }
+
+    #[test]
+    fn parses_graphics_mode_on_and_url() {
         let args = parse_args_from(test_args(&[
             "--graphics-mode",
             "on",
-            "--heartbeat-timeout-ms",
-            "0",
-            "--heartbeat-stall-grace-ms",
-            "bad",
             "https://example.test",
-        ]));
+        ]))
+        .unwrap();
 
         assert!(!args.unity_handler_mode);
         assert_eq!(args.url, "https://example.test");

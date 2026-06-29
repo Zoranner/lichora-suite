@@ -65,7 +65,7 @@ Unity 集成按 IPC v2 session 模型运行：
 
 ## 模块边界
 
-- `src/main.rs`：CLI、handler loop、Unity 管理命令分发，以及对旧 heartbeat 参数的忽略式兼容解析；这些参数不参与当前退出机制。
+- `src/main.rs`：CLI、handler loop 和 Unity 管理命令分发；旧 heartbeat 启动参数不再支持。
 - `src/browser/`：CEF app/client、浏览器实例生命周期、OSR render handler。
 - `src/modules/`：浏览器输入、输出和 capture 的业务适配层。
 - `src/ipc/`：IPC v2 runtime 适配层。
