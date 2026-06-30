@@ -1,24 +1,30 @@
 #!/bin/bash
 # CEF Environment Setup Script for Linux
 #
-# This script installs CEF binaries and sets up the environment
+# This script verifies a local CEF runtime directory and prints environment setup.
 
 set -e
 
 CEF_VERSION="145.0.27"
-CEF_INSTALL_DIR="${CEF_PATH:-$HOME/.local/share/cef}"
+CEF_INSTALL_DIR="${1:-${CEF_PATH:-}}"
 
 echo "=== CEF Environment Setup ==="
 echo "CEF Version: $CEF_VERSION"
-echo "Install Directory: $CEF_INSTALL_DIR"
 echo ""
 
-# Create installation directory
-mkdir -p "$CEF_INSTALL_DIR"
+if [ -z "$CEF_INSTALL_DIR" ]; then
+    echo "Usage: ./setup-linux.sh /path/to/cef/Release"
+    echo ""
+    echo "Download CEF $CEF_VERSION Linux x64 Standard Distribution manually,"
+    echo "extract it, then pass the extracted Release directory to this script."
+    exit 1
+fi
 
-# Download and extract CEF
-echo "Downloading CEF..."
-cargo run -p export-cef-dir -- --force "$CEF_INSTALL_DIR"
+if [ ! -f "$CEF_INSTALL_DIR/libcef.so" ]; then
+    echo "libcef.so not found in: $CEF_INSTALL_DIR"
+    echo "Pass the CEF Release directory that contains libcef.so."
+    exit 1
+fi
 
 # Set environment variables
 echo ""
@@ -29,11 +35,5 @@ echo "export CEF_PATH=\"$CEF_INSTALL_DIR\""
 echo "export LD_LIBRARY_PATH=\"\$LD_LIBRARY_PATH:\$CEF_PATH\""
 echo ""
 
-# Verify installation
-if [ -f "$CEF_INSTALL_DIR/libcef.so" ]; then
-    echo "✓ CEF installed successfully!"
-    echo "  Location: $CEF_INSTALL_DIR"
-else
-    echo "✗ CEF installation failed"
-    exit 1
-fi
+echo "CEF runtime verified:"
+echo "  Location: $CEF_INSTALL_DIR"
