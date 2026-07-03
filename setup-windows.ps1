@@ -3,7 +3,7 @@
 # This script downloads and sets up CEF binaries for Windows development
 
 param(
-    [string]$InstallPath = "C:\cef",
+    [string]$InstallPath = (Join-Path $env:LOCALAPPDATA "Lichora\cef\145.0.27-windows64"),
     [string]$Version = "145.0.27"
 )
 

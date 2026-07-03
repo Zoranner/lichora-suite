@@ -6,7 +6,7 @@ Windows：
 
 - Rust toolchain
 - Visual Studio Build Tools
-- CEF 145.0.27 runtime，默认由 `setup-windows.ps1` 准备并通过 `CEF_PATH` 指向
+- CEF 145.0.27 runtime，默认由 `setup-windows.ps1` 下载到 `%LOCALAPPDATA%\Lichora\cef\145.0.27-windows64` 并通过 `CEF_PATH` 指向
 
 Linux：
 
@@ -22,6 +22,12 @@ Windows 发布构建：
 ```powershell
 .\setup-windows.ps1
 .\build.ps1 -Release
+```
+
+如需放到其他目录，可显式传入安装路径：
+
+```powershell
+.\setup-windows.ps1 -InstallPath "E:\Repositories\.cache\cef\145.0.27-windows64"
 ```
 
 `build.ps1` 成功后把 Rust 可执行文件、native IPC 插件和 CEF runtime 复制到：
