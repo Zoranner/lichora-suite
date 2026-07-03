@@ -1,5 +1,7 @@
 # Lichora Web 与宿主场景融合设计
 
+落地重构计划见 `web-host-overlay-implementation.md`。该计划结合当前 Unity host 和 Rust IPC 代码状态，明确先重构宿主边界，再实现 `StaticPassRects`、`OverlayPassMap`、网页端 SDK 和 `BrowserAlpha`。
+
 ## 定位
 
 本文设计 `Lichora` 的 Web/Host 融合能力：网页作为宿主引擎场景上的 UI 层使用，部分区域可以显示为透明，并在受控网页模式下允许鼠标穿透到宿主场景。
