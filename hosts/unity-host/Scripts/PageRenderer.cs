@@ -10,15 +10,15 @@ namespace KimoTech.LichoraHost
     public class PageRenderer : PointableUI
     {
         private PageHandler _Handler;
+        private BrowserPageSession _Session;
         private BrowserSurface _Surface;
         private BrowserFramePump _FramePump;
         private bool _BrowserRestartPending;
 
-        public string GUID { get; private set; }
-        public int Width { get; private set; } = 800;
-        public int Height { get; private set; } = 600;
+        public string GUID => _Session?.GUID;
+        public int Width => _Session?.Width ?? 800;
+        public int Height => _Session?.Height ?? 600;
 
-        private string _RealAddress;
         public string Address = "https://www.bing.com";
 
         public bool FilteredColor = false;
@@ -26,9 +26,9 @@ namespace KimoTech.LichoraHost
         // BrowserRender.shader 按 Unity UI 管线适配，统一处理 Y 轴翻转和背景色剔除。
         private void Awake()
         {
-            GUID = Guid.NewGuid().ToString();
-            Width = (int)RectTransform.rect.width;
-            Height = (int)RectTransform.rect.height;
+            var width = (int)RectTransform.rect.width;
+            var height = (int)RectTransform.rect.height;
+            _Session = new BrowserPageSession(width, height);
         }
 
         private void Start()
@@ -38,7 +38,7 @@ namespace KimoTech.LichoraHost
                 BrowserStatic.Instance.WakeUp();
             }
 
-            _RealAddress = Address.StartsWith("local://")
+            var realAddress = Address.StartsWith("local://")
                 ? new Uri(
                     Path.Combine(
                         Environment.CurrentDirectory,
@@ -48,7 +48,8 @@ namespace KimoTech.LichoraHost
                     )
                 ).AbsoluteUri
                 : Address;
-            BrowserStatic.Instance.AddPage(GUID, Width, Height, _RealAddress);
+
+            _Session.Register(realAddress);
 
             _Surface = new BrowserSurface(
                 GetComponent<RawImage>(),
@@ -116,40 +117,19 @@ namespace KimoTech.LichoraHost
         {
             return new PageHandler(
                 GUID,
-                _RealAddress,
+                _Session.Address,
                 Width,
                 Height,
                 RectTransform,
-                CreateIpcInputWriter(),
-                CreateIpcFrameReader(),
-                CreateIpcOutputReader()
+                _Session.CreateIpcInputWriter(),
+                _Session.CreateIpcFrameReader(),
+                _Session.CreateIpcOutputReader()
             );
         }
 
         private void BindFocusControllerToHandler()
         {
             FocusController.BindImeInputSink(_Handler, _Handler.SurroundingTextProvider);
-        }
-
-        private BrowserIpcInputWriter CreateIpcInputWriter()
-        {
-            return BrowserStatic.Instanced
-                ? BrowserStatic.Instance.CreateIpcInputWriter(GUID)
-                : null;
-        }
-
-        private BrowserIpcFrameReader CreateIpcFrameReader()
-        {
-            return BrowserStatic.Instanced
-                ? BrowserStatic.Instance.CreateIpcFrameReader(GUID)
-                : null;
-        }
-
-        private BrowserIpcOutputReader CreateIpcOutputReader()
-        {
-            return BrowserStatic.Instanced
-                ? BrowserStatic.Instance.CreateIpcOutputReader(GUID)
-                : null;
         }
 
         private void CheckSizeChanged()
@@ -172,9 +152,7 @@ namespace KimoTech.LichoraHost
                 return;
             }
 
-            Width = newWidth;
-            Height = newHeight;
-
+            _Session.Resize(newWidth, newHeight);
             _Handler.Resize(Width, Height);
         }
 
@@ -209,10 +187,7 @@ namespace KimoTech.LichoraHost
 
             DisposeFocusController();
 
-            if (BrowserStatic.Instanced)
-            {
-                BrowserStatic.Instance.RemovePage(GUID);
-            }
+            _Session?.Remove();
 
             _Handler?.Destroy();
             _Surface?.Dispose();

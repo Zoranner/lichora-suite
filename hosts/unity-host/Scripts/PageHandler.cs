@@ -189,7 +189,6 @@ namespace KimoTech.LichoraHost
             Width = width;
             Height = height;
             _OutputPump.Resize(width, height);
-            BrowserStatic.Instance.ResizePage(GUID, Width, Height);
         }
 
         private bool TryCopyCaptureTo(NativeArray<byte> dest)
