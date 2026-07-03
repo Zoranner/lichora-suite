@@ -7,12 +7,16 @@ using UnityEngine.UI;
 namespace KimoTech.LichoraHost
 {
     [RequireComponent(typeof(RawImage))]
-    public class PageRenderer : PointableUI
+    [RequireComponent(typeof(RectTransform))]
+    [RequireComponent(typeof(BrowserInputController))]
+    public class PageRenderer : MonoBehaviour
     {
         private PageHandler _Handler;
         private BrowserPageSession _Session;
         private BrowserSurface _Surface;
         private BrowserFramePump _FramePump;
+        private BrowserInputController _InputController;
+        private RectTransform _RectTransform;
         private bool _BrowserRestartPending;
 
         public string GUID => _Session?.GUID;
@@ -26,6 +30,13 @@ namespace KimoTech.LichoraHost
         // BrowserRender.shader 按 Unity UI 管线适配，统一处理 Y 轴翻转和背景色剔除。
         private void Awake()
         {
+            _RectTransform = GetComponent<RectTransform>();
+            _InputController = GetComponent<BrowserInputController>();
+            if (_InputController == null)
+            {
+                _InputController = gameObject.AddComponent<BrowserInputController>();
+            }
+
             var width = (int)RectTransform.rect.width;
             var height = (int)RectTransform.rect.height;
             _Session = new BrowserPageSession(width, height);
@@ -71,9 +82,13 @@ namespace KimoTech.LichoraHost
             CheckSizeChanged();
             UpdateMouseState();
             _Handler?.ApplyMainThreadUpdates();
-            FocusController.Update(_Handler, _CompositionString, _InputString);
+            _InputController.FocusController.Update(
+                _Handler,
+                _InputController.CompositionString,
+                _InputController.InputString
+            );
             _FramePump?.Update(_Handler, _Surface);
-            ResetScrollDelta();
+            _InputController.ResetFrameDeltas();
         }
 
         private void HandleBrowserRestart()
@@ -99,7 +114,7 @@ namespace KimoTech.LichoraHost
 
         private void DestroyHandlerForBrowserRestart()
         {
-            FocusController.UnbindImeInputSink();
+            _InputController.FocusController.UnbindImeInputSink();
 
             _Handler?.DestroyForBrowserRestart();
             _Handler = null;
@@ -129,7 +144,10 @@ namespace KimoTech.LichoraHost
 
         private void BindFocusControllerToHandler()
         {
-            FocusController.BindImeInputSink(_Handler, _Handler.SurroundingTextProvider);
+            _InputController.FocusController.BindImeInputSink(
+                _Handler,
+                _Handler.SurroundingTextProvider
+            );
         }
 
         private void CheckSizeChanged()
@@ -163,7 +181,7 @@ namespace KimoTech.LichoraHost
                 return;
             }
 
-            _Handler.MouseState = _MouseState;
+            _Handler.MouseState = _InputController.MouseState;
         }
 
         public void ExecuteScript(string script)
@@ -177,6 +195,11 @@ namespace KimoTech.LichoraHost
             _Handler.ExecuteScript(script);
         }
 
+        public void ReleaseFocus()
+        {
+            _InputController?.ReleaseFocus();
+        }
+
         private void OnDestroy()
         {
             if (BrowserStatic.Instanced)
@@ -185,7 +208,7 @@ namespace KimoTech.LichoraHost
                 BrowserStatic.Instance.BrowserRestartedEvent.RemoveListener(OnBrowserRestarted);
             }
 
-            DisposeFocusController();
+            _InputController.DisposeFocusController();
 
             _Session?.Remove();
 
@@ -193,6 +216,19 @@ namespace KimoTech.LichoraHost
             _Surface?.Dispose();
             _Surface = null;
             _FramePump = null;
+        }
+
+        private RectTransform RectTransform
+        {
+            get
+            {
+                if (_RectTransform == null)
+                {
+                    _RectTransform = GetComponent<RectTransform>();
+                }
+
+                return _RectTransform;
+            }
         }
     }
 }
