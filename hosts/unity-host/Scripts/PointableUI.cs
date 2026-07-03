@@ -38,6 +38,7 @@ namespace KimoTech.LichoraHost
         protected bool _ImeActive = false;
         protected IImeInputSink _ImeInputSink;
         protected LinuxNativeImeModule _LinuxNativeImeModule;
+        private BrowserPointerInputSource _PointerInputSource;
 
         private RectTransform _RectTransform;
         protected RectTransform RectTransform
@@ -55,20 +56,20 @@ namespace KimoTech.LichoraHost
 
         public void OnPointerEnter(PointerEventData eventData)
         {
-            _MouseState.Effective = true;
+            PointerInputSource.Enter();
+            SyncMouseState();
         }
 
         public void OnPointerExit(PointerEventData eventData)
         {
-            _MouseState.Effective = false;
+            PointerInputSource.Exit();
+            SyncMouseState();
         }
 
         public void OnPointerMove(PointerEventData eventData)
         {
-            _MouseState.Effective = true;
-            var position = MapPointerToBrowser(eventData.position);
-            _MouseState.Delta += position - _MouseState.Position;
-            _MouseState.Position = position;
+            PointerInputSource.Move(eventData);
+            SyncMouseState();
         }
 
         public void OnPointerDown(PointerEventData eventData)
@@ -77,39 +78,20 @@ namespace KimoTech.LichoraHost
             Input.imeCompositionMode = IMECompositionMode.On;
             _LinuxNativeImeModule?.FocusIn();
 
-            switch (eventData.button)
-            {
-                case PointerEventData.InputButton.Left:
-                    _MouseState.LeftButton = true;
-                    break;
-                case PointerEventData.InputButton.Right:
-                    _MouseState.RightButton = true;
-                    break;
-                case PointerEventData.InputButton.Middle:
-                    _MouseState.MiddleButton = true;
-                    break;
-            }
+            PointerInputSource.Press(eventData);
+            SyncMouseState();
         }
 
         public void OnPointerUp(PointerEventData eventData)
         {
-            switch (eventData.button)
-            {
-                case PointerEventData.InputButton.Left:
-                    _MouseState.LeftButton = false;
-                    break;
-                case PointerEventData.InputButton.Right:
-                    _MouseState.RightButton = false;
-                    break;
-                case PointerEventData.InputButton.Middle:
-                    _MouseState.MiddleButton = false;
-                    break;
-            }
+            PointerInputSource.Release(eventData);
+            SyncMouseState();
         }
 
         public void OnScroll(PointerEventData eventData)
         {
-            _MouseState.ScrollDelta = eventData.scrollDelta;
+            PointerInputSource.Scroll(eventData);
+            SyncMouseState();
         }
 
         /// <summary>
@@ -117,8 +99,8 @@ namespace KimoTech.LichoraHost
         /// </summary>
         protected void ResetScrollDelta()
         {
-            _MouseState.ScrollDelta = Vector2.zero;
-            _MouseState.Delta = Vector2.zero;
+            PointerInputSource.ResetFrameDeltas();
+            SyncMouseState();
         }
 
         protected virtual void OnGUI()
@@ -287,20 +269,24 @@ namespace KimoTech.LichoraHost
             _LinuxNativeImeModule?.FocusOut();
         }
 
-        private Vector2 MapPointerToBrowser(Vector2 position)
+        private BrowserPointerInputSource PointerInputSource
         {
-            RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                RectTransform,
-                position,
-                null,
-                out var localPoint
-            );
+            get
+            {
+                if (_PointerInputSource == null)
+                {
+                    _PointerInputSource = new BrowserPointerInputSource(
+                        new BrowserCoordinateMapper(RectTransform)
+                    );
+                }
 
-            var browserX = (localPoint.x - RectTransform.rect.min.x) / RectTransform.rect.width;
-            var browserY =
-                1 - (localPoint.y - RectTransform.rect.min.y) / RectTransform.rect.height;
+                return _PointerInputSource;
+            }
+        }
 
-            return new Vector2(browserX, browserY);
+        private void SyncMouseState()
+        {
+            _MouseState = PointerInputSource.State;
         }
     }
 }
