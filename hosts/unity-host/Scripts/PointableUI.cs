@@ -34,10 +34,7 @@ namespace KimoTech.LichoraHost
             new ConcurrentQueue<KeyboardState>();
         protected string _CompositionString = "";
         protected string _InputString = "";
-        protected bool _HasFocus = false;
-        protected bool _ImeActive = false;
-        protected IImeInputSink _ImeInputSink;
-        protected LinuxNativeImeModule _LinuxNativeImeModule;
+        private BrowserFocusController _FocusController;
         private BrowserPointerInputSource _PointerInputSource;
 
         private RectTransform _RectTransform;
@@ -74,9 +71,7 @@ namespace KimoTech.LichoraHost
 
         public void OnPointerDown(PointerEventData eventData)
         {
-            _HasFocus = true;
-            Input.imeCompositionMode = IMECompositionMode.On;
-            _LinuxNativeImeModule?.FocusIn();
+            FocusController.FocusIn();
 
             PointerInputSource.Press(eventData);
             SyncMouseState();
@@ -105,7 +100,7 @@ namespace KimoTech.LichoraHost
 
         protected virtual void OnGUI()
         {
-            if (!_HasFocus)
+            if (_FocusController == null || !_FocusController.HasFocus)
             {
                 return;
             }
@@ -122,7 +117,7 @@ namespace KimoTech.LichoraHost
 
             // 实时更新 IME 激活状态，避免依赖 LateUpdate 中的延迟更新
             // 当 compositionString 非空时，说明正在使用输入法进行组合输入（如中文拼音）
-            _ImeActive = !string.IsNullOrEmpty(_CompositionString);
+            FocusController.SetUnityImeActive(!string.IsNullOrEmpty(_CompositionString));
 
             // 处理剪贴板粘贴（Ctrl+V）
             if (currentEvent.type == EventType.ValidateCommand)
@@ -140,7 +135,7 @@ namespace KimoTech.LichoraHost
                     var clipboardText = GUIUtility.systemCopyBuffer;
                     if (!string.IsNullOrEmpty(clipboardText))
                     {
-                        _ImeInputSink?.CommitImeText(clipboardText);
+                        FocusController.CommitImeText(clipboardText);
                     }
 
                     currentEvent.Use(); // 标记事件为已处理
@@ -158,10 +153,7 @@ namespace KimoTech.LichoraHost
 
         private void ProcessKeyEvent(Event currentEvent, KeyEventType eventType)
         {
-            if (
-                _LinuxNativeImeModule != null
-                && _LinuxNativeImeModule.ProcessKeyEvent(currentEvent, eventType)
-            )
+            if (FocusController.ProcessKeyEvent(currentEvent, eventType))
             {
                 currentEvent.Use();
                 return;
@@ -210,7 +202,7 @@ namespace KimoTech.LichoraHost
             // IImeInputSink.CommitImeText 统一处理，不应该在 OnGUI 中发送（否则会重复）。
             //
             // ASCII 字符（英文字母、数字、标点等）在普通英文输入时不经过 IME 组合，
-            // 需要在 OnGUI 中发送；在 IME 拼音输入时会被 compositionString 或 _ImeActive 拦截。
+            // 需要在 OnGUI 中发送；在 IME 拼音输入时会被 compositionString 或焦点控制器拦截。
             var isComposingNow = !string.IsNullOrEmpty(_CompositionString);
             var isAsciiChar = currentEvent.character < 128;
 
@@ -218,7 +210,7 @@ namespace KimoTech.LichoraHost
                 eventType == KeyEventType.KeyDown
                 && hasValidChar
                 && !isComposingNow
-                && !_ImeActive
+                && !FocusController.ImeActive
                 && isAsciiChar;
 
             if (shouldSendChar)
@@ -264,9 +256,26 @@ namespace KimoTech.LichoraHost
 
         public void ReleaseFocus()
         {
-            _HasFocus = false;
-            Input.imeCompositionMode = IMECompositionMode.Auto;
-            _LinuxNativeImeModule?.FocusOut();
+            FocusController.FocusOut();
+        }
+
+        protected BrowserFocusController FocusController
+        {
+            get
+            {
+                if (_FocusController == null)
+                {
+                    _FocusController = new BrowserFocusController(_KeyboardEvents);
+                }
+
+                return _FocusController;
+            }
+        }
+
+        protected void DisposeFocusController()
+        {
+            _FocusController?.Dispose();
+            _FocusController = null;
         }
 
         private BrowserPointerInputSource PointerInputSource

@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Runtime.InteropServices;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
@@ -13,7 +12,6 @@ namespace KimoTech.LichoraHost
         private PageHandler _Handler;
         private BrowserSurface _Surface;
         private BrowserFramePump _FramePump;
-        private bool _PreviousHasFocus = false;
         private bool _BrowserRestartPending;
 
         public string GUID { get; private set; }
@@ -26,8 +24,6 @@ namespace KimoTech.LichoraHost
         public bool FilteredColor = false;
 
         // BrowserRender.shader 按 Unity UI 管线适配，统一处理 Y 轴翻转和背景色剔除。
-        private static bool IsLinux => RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
-
         private void Awake()
         {
             GUID = Guid.NewGuid().ToString();
@@ -62,12 +58,7 @@ namespace KimoTech.LichoraHost
             _FramePump = new BrowserFramePump();
 
             _Handler = CreatePageHandler();
-            _ImeInputSink = _Handler;
-            if (IsLinux)
-            {
-                _LinuxNativeImeModule = LinuxNativeImeModule.TryCreate(_Handler);
-                _LinuxNativeImeModule?.SetSurroundingTextProvider(_Handler.SurroundingTextProvider);
-            }
+            BindFocusControllerToHandler();
 
             BrowserStatic.Instance.BrowserRestartingEvent.AddListener(OnBrowserRestarting);
             BrowserStatic.Instance.BrowserRestartedEvent.AddListener(OnBrowserRestarted);
@@ -79,9 +70,7 @@ namespace KimoTech.LichoraHost
             CheckSizeChanged();
             UpdateMouseState();
             _Handler?.ApplyMainThreadUpdates();
-            _LinuxNativeImeModule?.Update();
-            UpdateKeyboardState();
-            UpdateImeState();
+            FocusController.Update(_Handler, _CompositionString, _InputString);
             _FramePump?.Update(_Handler, _Surface);
             ResetScrollDelta();
         }
@@ -109,12 +98,10 @@ namespace KimoTech.LichoraHost
 
         private void DestroyHandlerForBrowserRestart()
         {
-            _LinuxNativeImeModule?.Dispose();
-            _LinuxNativeImeModule = null;
+            FocusController.UnbindImeInputSink();
 
             _Handler?.DestroyForBrowserRestart();
             _Handler = null;
-            _ImeInputSink = null;
         }
 
         private void RecreateHandlerAfterBrowserRestart()
@@ -122,9 +109,7 @@ namespace KimoTech.LichoraHost
             DestroyHandlerForBrowserRestart();
 
             _Handler = CreatePageHandler();
-            _ImeInputSink = _Handler;
-            _LinuxNativeImeModule = IsLinux ? LinuxNativeImeModule.TryCreate(_Handler) : null;
-            _LinuxNativeImeModule?.SetSurroundingTextProvider(_Handler.SurroundingTextProvider);
+            BindFocusControllerToHandler();
         }
 
         private PageHandler CreatePageHandler()
@@ -139,6 +124,11 @@ namespace KimoTech.LichoraHost
                 CreateIpcFrameReader(),
                 CreateIpcOutputReader()
             );
+        }
+
+        private void BindFocusControllerToHandler()
+        {
+            FocusController.BindImeInputSink(_Handler, _Handler.SurroundingTextProvider);
         }
 
         private BrowserIpcInputWriter CreateIpcInputWriter()
@@ -188,44 +178,6 @@ namespace KimoTech.LichoraHost
             _Handler.Resize(Width, Height);
         }
 
-        private void UpdateKeyboardState()
-        {
-            if (_Handler == null || !_Handler.State || !_HasFocus)
-            {
-                return;
-            }
-
-            _Handler.ProcessKeyboardEvents(_KeyboardEvents);
-        }
-
-        private void UpdateImeState()
-        {
-            if (_Handler == null || !_Handler.State)
-            {
-                return;
-            }
-
-            if (_LinuxNativeImeModule != null && _LinuxNativeImeModule.IsAvailable)
-            {
-                _ImeActive = false;
-                return;
-            }
-
-            if (_HasFocus && !_PreviousHasFocus)
-            {
-                _Handler.ResetIme();
-            }
-
-            _PreviousHasFocus = _HasFocus;
-
-            if (!_HasFocus)
-            {
-                return;
-            }
-
-            _ImeActive = _Handler.UpdateIme(_CompositionString, _InputString);
-        }
-
         private void UpdateMouseState()
         {
             if (_Handler == null || !_Handler.State)
@@ -255,7 +207,7 @@ namespace KimoTech.LichoraHost
                 BrowserStatic.Instance.BrowserRestartedEvent.RemoveListener(OnBrowserRestarted);
             }
 
-            _LinuxNativeImeModule?.Dispose();
+            DisposeFocusController();
 
             if (BrowserStatic.Instanced)
             {
