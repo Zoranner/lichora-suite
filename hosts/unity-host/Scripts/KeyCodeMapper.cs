@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using UnityEngine;
 
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     public static class KeyCodeMapper
     {

@@ -2,7 +2,7 @@ using System;
 using System.Linq;
 using UnityEngine;
 
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     public sealed class ImeInputState
     {

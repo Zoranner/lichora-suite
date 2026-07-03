@@ -1,4 +1,4 @@
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     public interface IImeInputSink
     {

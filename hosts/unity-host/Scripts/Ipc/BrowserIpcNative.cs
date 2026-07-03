@@ -4,7 +4,7 @@ using System.Text;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     internal static class BrowserIpcNative
     {

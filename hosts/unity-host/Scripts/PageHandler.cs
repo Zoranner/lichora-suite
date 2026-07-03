@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 using Unity.Collections;
 using UnityEngine;
 
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     public sealed class PageHandler : IImeInputSink
     {

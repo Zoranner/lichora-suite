@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     /// <summary>
     /// MouseState 使用 struct 以减少 GC 压力（小对象值类型更高效）

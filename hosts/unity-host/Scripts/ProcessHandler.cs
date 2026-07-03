@@ -9,7 +9,7 @@ using System.Threading;
 using KimoTech.SuperEvents;
 using UnityEngine;
 
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     public class ProcessHandler
     {

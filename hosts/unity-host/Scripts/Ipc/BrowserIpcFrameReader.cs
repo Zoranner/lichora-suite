@@ -1,7 +1,7 @@
 using System;
 using Unity.Collections;
 
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     public sealed class BrowserIpcFrameReader : IDisposable
     {

@@ -1,6 +1,6 @@
 using KimoTech.GlobalConfigs;
 
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     public class BrowserConfig : IBaseConfig
     {

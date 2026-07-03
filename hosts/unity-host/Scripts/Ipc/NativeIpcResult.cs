@@ -1,6 +1,6 @@
 using System;
 
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     internal readonly struct NativeIpcResult
     {

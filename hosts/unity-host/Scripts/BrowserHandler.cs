@@ -8,7 +8,7 @@
 using KimoTech.GlobalConfigs;
 using UnityEngine;
 
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     public class BrowserHandler : ProcessHandler
     {

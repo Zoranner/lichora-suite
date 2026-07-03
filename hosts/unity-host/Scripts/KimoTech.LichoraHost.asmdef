@@ -1,6 +1,6 @@
 {
-    "name": "KimoTech.EmbeddedBrowser",
-    "rootNamespace": "KimoTech.EmbeddedBrowser",
+    "name": "KimoTech.LichoraHost",
+    "rootNamespace": "KimoTech.LichoraHost",
     "references": [
         "GUID:3dcbb65762ae01440b7e7f4a08bf32bd",
         "GUID:f51ebe6a0ceec4240a699833d6309b23",

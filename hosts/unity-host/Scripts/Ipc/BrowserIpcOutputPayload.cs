@@ -1,7 +1,7 @@
 using System;
 using System.Text;
 
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     internal enum BrowserIpcOutputPayloadKind : ushort
     {

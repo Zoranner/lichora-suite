@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // Project: EmbeddedBrowser
 // Author: yangxinran@EN01-210826-09
 // Datetime: 2024-04-08 10:15:32
@@ -7,7 +7,7 @@
 
 using UnityEditor;
 
-namespace KimoTech.EmbeddedBrowser.Editors
+namespace KimoTech.LichoraHost.Editors
 {
     [CanEditMultipleObjects]
     [CustomEditor(typeof(PageRenderer))]

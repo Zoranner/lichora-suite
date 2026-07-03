@@ -4,7 +4,7 @@ using KimoTech.SingleBehaviours;
 using KimoTech.SuperEvents;
 using UnityEngine;
 
-namespace KimoTech.EmbeddedBrowser
+namespace KimoTech.LichoraHost
 {
     public class BrowserStatic : SingleBehaviour<BrowserStatic>
     {

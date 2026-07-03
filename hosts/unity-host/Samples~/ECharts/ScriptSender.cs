@@ -1,6 +1,6 @@
 using System.Threading;
 using Cysharp.Threading.Tasks;
-using KimoTech.EmbeddedBrowser;
+using KimoTech.LichoraHost;
 using UnityEngine;
 
 public class ScriptSender : MonoBehaviour
