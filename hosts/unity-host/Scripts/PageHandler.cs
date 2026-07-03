@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace KimoTech.LichoraHost
 {
-    public sealed class PageHandler : IImeInputSink
+    public sealed class PageHandler : IImeInputSink, IBrowserFrameSource
     {
         private readonly BrowserIpcInputWriter _IpcInputWriter;
         private readonly BrowserIpcFrameReader _IpcFrameReader;
@@ -66,6 +66,9 @@ namespace KimoTech.LichoraHost
         public int Width { get; private set; }
         public int Height { get; private set; }
         public bool State => BrowserStatic.Instanced && BrowserStatic.Instance.IsIpcOpen;
+        public bool IsReady => State;
+        public int FrameWidth => NativeFrameWidth > 0 ? NativeFrameWidth : DataWidth;
+        public int FrameHeight => NativeFrameHeight > 0 ? NativeFrameHeight : DataHeight;
         public int DataWidth => NativeFrameWidth;
         public int DataHeight => NativeFrameHeight;
         public int NativeFrameWidth { get; private set; }
@@ -191,7 +194,7 @@ namespace KimoTech.LichoraHost
             BrowserStatic.Instance.ResizePage(GUID, Width, Height);
         }
 
-        public bool TryCopyCaptureTo(NativeArray<byte> dest, ref int lastFrameVersion)
+        private bool TryCopyCaptureTo(NativeArray<byte> dest)
         {
             if (!State)
             {
@@ -226,8 +229,12 @@ namespace KimoTech.LichoraHost
             _LastNativeFrameSequence = sequence;
             NativeFrameWidth = width;
             NativeFrameHeight = height;
-            lastFrameVersion = CaptureFrameVersion;
             return true;
+        }
+
+        public bool TryCopyFrameTo(NativeArray<byte> destination)
+        {
+            return TryCopyCaptureTo(destination);
         }
 
         public void Destroy()

@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using Cysharp.Threading.Tasks;
-using Unity.Collections;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -11,13 +10,9 @@ namespace KimoTech.LichoraHost
     [RequireComponent(typeof(RawImage))]
     public class PageRenderer : PointableUI
     {
-        private RawImage _RawImage;
-        private Material _RenderMaterial;
-        private Material _Material;
         private PageHandler _Handler;
-        private NativeArray<byte> _TextureArray;
-        private Texture2D _Texture2D;
-        private int _LastCaptureFrameVersion = -1;
+        private BrowserSurface _Surface;
+        private BrowserFramePump _FramePump;
         private bool _PreviousHasFocus = false;
         private bool _BrowserRestartPending;
 
@@ -59,32 +54,12 @@ namespace KimoTech.LichoraHost
                 : Address;
             BrowserStatic.Instance.AddPage(GUID, Width, Height, _RealAddress);
 
-            _RawImage = GetComponent<RawImage>();
-            _Texture2D = new Texture2D(Width, Height, TextureFormat.BGRA32, false, false)
-            {
-                filterMode = FilterMode.Bilinear,
-            };
-            _TextureArray = _Texture2D.GetRawTextureData<byte>();
-            _RenderMaterial = Resources.Load<Material>("Materials/BrowserRender");
-            _RawImage.texture = _Texture2D;
-
-            if (_RenderMaterial == null)
-            {
-                Debug.LogWarning(
-                    "[PageRenderer] Material 'Materials/BrowserRender' not found, fallback to RawImage default material."
-                );
-                _RawImage.material = null;
-                _RawImage.uvRect = new Rect(0f, 1f, 1f, -1f);
-            }
-            else
-            {
-                _RawImage.uvRect = new Rect(0f, 0f, 1f, 1f);
-                _Material = Instantiate(_RenderMaterial);
-                _Material.mainTexture = _Texture2D;
-                _Material.SetFloat("_FlipY", 1f);
-                _Material.SetFloat("_ColorThreshold", FilteredColor ? 1 : 0);
-                _RawImage.material = _Material;
-            }
+            _Surface = new BrowserSurface(
+                GetComponent<RawImage>(),
+                BrowserRenderSettings.FromLegacyFilteredColor(FilteredColor)
+            );
+            _Surface.Initialize(Width, Height);
+            _FramePump = new BrowserFramePump();
 
             _Handler = CreatePageHandler();
             _ImeInputSink = _Handler;
@@ -107,10 +82,7 @@ namespace KimoTech.LichoraHost
             _LinuxNativeImeModule?.Update();
             UpdateKeyboardState();
             UpdateImeState();
-            if (CopyLatestTexture())
-            {
-                ApplyTexture();
-            }
+            _FramePump?.Update(_Handler, _Surface);
             ResetScrollDelta();
         }
 
@@ -153,7 +125,6 @@ namespace KimoTech.LichoraHost
             _ImeInputSink = _Handler;
             _LinuxNativeImeModule = IsLinux ? LinuxNativeImeModule.TryCreate(_Handler) : null;
             _LinuxNativeImeModule?.SetSurroundingTextProvider(_Handler.SurroundingTextProvider);
-            _LastCaptureFrameVersion = -1;
         }
 
         private PageHandler CreatePageHandler()
@@ -255,43 +226,6 @@ namespace KimoTech.LichoraHost
             _ImeActive = _Handler.UpdateIme(_CompositionString, _InputString);
         }
 
-        private void ApplyTexture()
-        {
-            if (!_TextureArray.IsCreated || _Texture2D == null)
-            {
-                return;
-            }
-
-            _Texture2D.Apply(false);
-        }
-
-        private bool CopyLatestTexture()
-        {
-            if (_Handler == null || !_Handler.State)
-            {
-                return false;
-            }
-
-            var dataWidth =
-                _Handler.NativeFrameWidth > 0 ? _Handler.NativeFrameWidth : _Handler.DataWidth;
-            var dataHeight =
-                _Handler.NativeFrameHeight > 0 ? _Handler.NativeFrameHeight : _Handler.DataHeight;
-            var expectedSize = dataWidth * dataHeight * 4;
-
-            if (_TextureArray.Length != expectedSize && dataWidth > 0 && dataHeight > 0)
-            {
-                RecreateTextureWithSize(dataWidth, dataHeight);
-                _LastCaptureFrameVersion = -1;
-            }
-
-            if (!_TextureArray.IsCreated || _TextureArray.Length != expectedSize)
-            {
-                return false;
-            }
-
-            return _Handler.TryCopyCaptureTo(_TextureArray, ref _LastCaptureFrameVersion);
-        }
-
         private void UpdateMouseState()
         {
             if (_Handler == null || !_Handler.State)
@@ -313,27 +247,6 @@ namespace KimoTech.LichoraHost
             _Handler.ExecuteScript(script);
         }
 
-        private void RecreateTextureWithSize(int width, int height)
-        {
-            _TextureArray = default;
-
-            if (_Texture2D != null)
-            {
-                Destroy(_Texture2D);
-            }
-
-            _Texture2D = new Texture2D(width, height, TextureFormat.BGRA32, false, false)
-            {
-                filterMode = FilterMode.Bilinear,
-            };
-            _TextureArray = _Texture2D.GetRawTextureData<byte>();
-            _RawImage.texture = _Texture2D;
-            if (_Material != null)
-            {
-                _Material.mainTexture = _Texture2D;
-            }
-        }
-
         private void OnDestroy()
         {
             if (BrowserStatic.Instanced)
@@ -350,20 +263,9 @@ namespace KimoTech.LichoraHost
             }
 
             _Handler?.Destroy();
-
-            _TextureArray = default;
-
-            if (_Material != null)
-            {
-                Destroy(_Material);
-            }
-
-            if (_Texture2D != null)
-            {
-                Destroy(_Texture2D);
-            }
-
-            _RawImage = null;
+            _Surface?.Dispose();
+            _Surface = null;
+            _FramePump = null;
         }
     }
 }
