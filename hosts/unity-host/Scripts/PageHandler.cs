@@ -9,8 +9,7 @@ namespace KimoTech.LichoraHost
     {
         private readonly BrowserIpcInputWriter _IpcInputWriter;
         private readonly BrowserIpcFrameReader _IpcFrameReader;
-        private readonly BrowserIpcOutputReader _IpcOutputReader;
-        private readonly BrowserOutputState _OutputState;
+        private readonly BrowserOutputPump _OutputPump;
         private readonly ImeInputState _ImeInputState;
         private bool _HasMouseState;
         private MouseState _LastMouseState;
@@ -51,8 +50,7 @@ namespace KimoTech.LichoraHost
             NativeFrameHeight = height;
             _IpcInputWriter = ipcInputWriter;
             _IpcFrameReader = ipcFrameReader;
-            _IpcOutputReader = ipcOutputReader;
-            _OutputState = new BrowserOutputState(rectTransform, width, height);
+            _OutputPump = new BrowserOutputPump(ipcOutputReader, rectTransform, width, height);
             _ImeInputState = new ImeInputState(
                 PushImeComposition,
                 PushImeCommit,
@@ -75,7 +73,8 @@ namespace KimoTech.LichoraHost
         public int NativeFrameHeight { get; private set; }
         public int CaptureFrameVersion =>
             checked((int)Math.Min(_LastNativeFrameSequence, int.MaxValue));
-        public ISurroundingTextSnapshotProvider SurroundingTextProvider => _OutputState;
+        public ISurroundingTextSnapshotProvider SurroundingTextProvider =>
+            _OutputPump.SurroundingTextProvider;
 
         public MouseState MouseState
         {
@@ -134,8 +133,7 @@ namespace KimoTech.LichoraHost
                 return;
             }
 
-            DrainOutputEvents();
-            _OutputState.ApplyPendingImePosition();
+            _OutputPump.ReadLatestAndApplyMainThreadUpdates();
         }
 
         public void ResetIme()
@@ -190,7 +188,7 @@ namespace KimoTech.LichoraHost
 
             Width = width;
             Height = height;
-            _OutputState.Resize(width, height);
+            _OutputPump.Resize(width, height);
             BrowserStatic.Instance.ResizePage(GUID, Width, Height);
         }
 
@@ -241,7 +239,7 @@ namespace KimoTech.LichoraHost
         {
             _IpcInputWriter.Dispose();
             _IpcFrameReader.Dispose();
-            _IpcOutputReader.Dispose();
+            _OutputPump.Dispose();
         }
 
         public void DestroyForBrowserRestart()
@@ -389,11 +387,6 @@ namespace KimoTech.LichoraHost
         private void PushImeDeleteSurroundingText(int before, int after)
         {
             _IpcInputWriter.PushImeDeleteSurroundingText(NextIpcInputSequence(), before, after);
-        }
-
-        private void DrainOutputEvents()
-        {
-            _OutputState.ReadLatest(_IpcOutputReader);
         }
 
         private ulong NextIpcInputSequence()
