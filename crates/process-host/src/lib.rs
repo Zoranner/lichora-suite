@@ -135,7 +135,9 @@ pub extern "C" fn process_host_wait(pid: i32) -> i32 {
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-        use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, WaitForSingleObject, INFINITE,
+        };
 
         // Grab the handle but do NOT remove it yet; process_host_kill may need it
         // concurrently if Stop() races with natural process exit.
@@ -151,14 +153,21 @@ pub extern "C" fn process_host_wait(pid: i32) -> i32 {
         // Wait without holding the Mutex so process_host_kill can proceed.
         let result = unsafe { WaitForSingleObject(h as _, INFINITE) };
 
+        let mut exit_code = 0u32;
+        let got_exit_code = if result == WAIT_OBJECT_0 {
+            (unsafe { GetExitCodeProcess(h as _, &mut exit_code) }) != 0
+        } else {
+            false
+        };
+
         // Clean up: remove from map and close handle.
         if let Ok(mut map) = win::HANDLES.lock() {
             map.remove(&(pid as u32));
         }
         unsafe { CloseHandle(h as _) };
 
-        if result == WAIT_OBJECT_0 {
-            0
+        if got_exit_code {
+            exit_code as i32
         } else {
             -1
         }

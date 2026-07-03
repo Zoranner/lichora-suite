@@ -74,6 +74,7 @@ namespace KimoTech.LichoraHost
         private void StartBrowserProcess()
         {
             _HandlerGuid = Guid.NewGuid().ToString();
+            Debug.Log($"[BrowserStatic] Starting Lichora handler {_HandlerGuid}");
             _Handler = new BrowserHandler(_HandlerGuid);
             _Handler.ProcessExitedEvent.AddListener(OnProcessExited);
             _Handler.Start();
@@ -89,6 +90,7 @@ namespace KimoTech.LichoraHost
             {
                 _IpcClient = BrowserIpcClient.Open(_HandlerGuid);
                 _IpcControlWriter = _IpcClient.CreateControlWriter();
+                Debug.Log($"[BrowserStatic] Browser IPC opened for handler {_HandlerGuid}");
             }
             catch (Exception exception)
             {
@@ -121,12 +123,19 @@ namespace KimoTech.LichoraHost
         {
             if (_IpcControlWriter == null)
             {
+                Debug.LogWarning(
+                    $"[BrowserStatic] Skip Browser IPC control {operation}; IPC is not open for handler {_HandlerGuid}."
+                );
                 return;
             }
 
             try
             {
-                writeControl(_IpcControlWriter, ++_IpcControlSequence);
+                var sequence = ++_IpcControlSequence;
+                writeControl(_IpcControlWriter, sequence);
+                Debug.Log(
+                    $"[BrowserStatic] Sent Browser IPC control {operation} seq={sequence} handler={_HandlerGuid}."
+                );
             }
             catch (Exception exception)
             {
@@ -171,6 +180,17 @@ namespace KimoTech.LichoraHost
                 _HasPendingProcessExit = false;
             }
 
+            if (exitInfo.ExitCode == 0)
+            {
+                Debug.Log(
+                    $"[BrowserStatic] Lichora runtime exited normally "
+                        + $"(PID={exitInfo.Pid}, code={exitInfo.ExitCode}, wasStopping={exitInfo.WasStopping}). "
+                        + "Scheduling restart because BrowserStatic is still active."
+                );
+                RequestRestart();
+                return;
+            }
+
             Debug.LogWarning(
                 $"[BrowserStatic] Lichora runtime exited unexpectedly "
                     + $"(PID={exitInfo.Pid}, code={exitInfo.ExitCode}, wasStopping={exitInfo.WasStopping}). "
@@ -203,6 +223,7 @@ namespace KimoTech.LichoraHost
 
         private void RestartBrowserProcess()
         {
+            Debug.Log($"[BrowserStatic] Restarting Lichora handler. pages={_Pages.Count}");
             BrowserRestartingEvent?.Dispatch(true);
 
             _Handler?.ProcessExitedEvent.RemoveListener(OnProcessExited);
@@ -226,6 +247,7 @@ namespace KimoTech.LichoraHost
             }
 
             BrowserRestartedEvent?.Dispatch(true);
+            Debug.Log($"[BrowserStatic] Lichora handler restarted. handler={_HandlerGuid}");
         }
 
         private void OnDestroy()

@@ -12,6 +12,7 @@ pub struct CaptureModule {
     frame_sequence: u64,
     width: i32,
     height: i32,
+    opaque_frame_buffer: Vec<u8>,
 }
 
 impl CaptureModule {
@@ -27,6 +28,7 @@ impl CaptureModule {
             frame_sequence: 0,
             width,
             height,
+            opaque_frame_buffer: Vec::new(),
         })
     }
 
@@ -49,9 +51,20 @@ impl CaptureModule {
         );
 
         self.frame_sequence = self.frame_sequence.saturating_add(1);
+        self.opaque_frame_buffer.clear();
+        self.opaque_frame_buffer.extend_from_slice(pixels);
+        for pixel in self.opaque_frame_buffer.chunks_exact_mut(BYTES_PER_PIXEL) {
+            pixel[3] = u8::MAX;
+        }
+
         let published = self
             .frame_channel
-            .publish_full(self.frame_sequence, width as u32, height as u32, pixels)?
+            .publish_full(
+                self.frame_sequence,
+                width as u32,
+                height as u32,
+                &self.opaque_frame_buffer,
+            )?
             .published();
         if published {
             self.width = width;
@@ -94,7 +107,7 @@ mod tests {
         let browser_id = uuid::Uuid::new_v4().to_string();
         let mut module =
             CaptureModule::new_frame_channel_only(&session_id, &browser_id, 2, 2).unwrap();
-        let pixels = vec![9u8; 2 * 2 * 4];
+        let pixels = vec![9u8, 9, 9, 255, 9, 9, 9, 255, 9, 9, 9, 255, 9, 9, 9, 255];
 
         assert!(module.write_paint_frame(2, 2, &pixels, &[]).unwrap());
 
@@ -109,6 +122,29 @@ mod tests {
         assert_eq!(2, copied.width);
         assert_eq!(2, copied.height);
         assert_eq!(pixels, buffer);
+        std::env::remove_var("EBI_IPC_DIR");
+    }
+
+    #[test]
+    fn publishes_browser_frames_as_opaque_bgra() {
+        let temp = tempfile::tempdir().unwrap();
+        std::env::set_var("EBI_IPC_DIR", temp.path());
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let browser_id = uuid::Uuid::new_v4().to_string();
+        let mut module =
+            CaptureModule::new_frame_channel_only(&session_id, &browser_id, 2, 1).unwrap();
+        let pixels = vec![10u8, 20, 30, 0, 40, 50, 60, 128];
+
+        assert!(module.write_paint_frame(2, 1, &pixels, &[]).unwrap());
+
+        let spec = ipc::frame_channel_spec(&session_id, &browser_id);
+        let mut reader =
+            ipc::FrameChannel::open_in_dir(temp.path(), &spec, ipc::ChannelOpenMode::OpenExisting)
+                .unwrap();
+        let mut buffer = vec![0u8; pixels.len()];
+        reader.try_copy_latest(&mut buffer).unwrap();
+
+        assert_eq!(vec![10u8, 20, 30, 255, 40, 50, 60, 255], buffer);
         std::env::remove_var("EBI_IPC_DIR");
     }
 }

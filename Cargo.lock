@@ -768,7 +768,6 @@ dependencies = [
  "cfg-if",
  "ctrlc",
  "env_logger",
- "libc",
  "lichora-ipc",
  "log",
  "memmap2",
@@ -778,7 +777,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "uuid",
- "winapi",
 ]
 
 [[package]]

@@ -60,7 +60,7 @@ namespace KimoTech.LichoraHost
             BrowserStatic.Instance.AddPage(GUID, Width, Height, _RealAddress);
 
             _RawImage = GetComponent<RawImage>();
-            _Texture2D = new Texture2D(Width, Height, TextureFormat.BGRA32, false, true)
+            _Texture2D = new Texture2D(Width, Height, TextureFormat.BGRA32, false, false)
             {
                 filterMode = FilterMode.Bilinear,
             };
@@ -322,7 +322,7 @@ namespace KimoTech.LichoraHost
                 Destroy(_Texture2D);
             }
 
-            _Texture2D = new Texture2D(width, height, TextureFormat.BGRA32, false, true)
+            _Texture2D = new Texture2D(width, height, TextureFormat.BGRA32, false, false)
             {
                 filterMode = FilterMode.Bilinear,
             };

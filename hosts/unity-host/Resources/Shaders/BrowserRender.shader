@@ -106,6 +106,10 @@ Shader "KimoTech/LichoraHost/BrowserRender"
                 {
                     color.a *= smoothstep(0.0, _ColorThreshold, colorDistance);
                 }
+                else
+                {
+                    color.a = 1.0;
+                }
 
                 #ifdef UNITY_UI_CLIP_RECT
                 color.a *= UnityGet2DClipping(i.worldPosition.xy, _ClipRect);
