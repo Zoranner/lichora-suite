@@ -1,5 +1,5 @@
 {
-    "name": "com.kimotech.lichora",
+    "name": "com.kimotech.lichora-host",
     "displayName": "Lichora Unity Host",
     "description": "Unity host adapter for Lichora.",
     "version": "0.1.0",
