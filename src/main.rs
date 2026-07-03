@@ -1,4 +1,4 @@
-//! Headless Browser main entry point
+//! Lichora main entry point
 //!
 //! This is the standalone executable for testing and production use.
 
@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use headless_browser_core::browser::{shutdown_browser_runtime, BrowserConfig, BrowserEntry};
+use lichora_core::browser::{shutdown_browser_runtime, BrowserConfig, BrowserEntry};
 use log::{error, info, warn};
 
 const SINGLE_INSTANCE_LOCK: &str = "com.kimtech.headless-browser";
@@ -23,7 +23,7 @@ fn main() {
         .filter_level(log::LevelFilter::Info)
         .init();
 
-    info!("=== Headless Browser (cef-rs) ===");
+    info!("=== Lichora (cef-rs) ===");
     info!("Version: {}", env!("CARGO_PKG_VERSION"));
 
     // Parse command line arguments
@@ -50,7 +50,7 @@ fn main() {
 fn execute_cef_subprocess() {
     use cef::*;
 
-    headless_browser_core::browser::configure_cef_api_version();
+    lichora_core::browser::configure_cef_api_version();
     let args = cef::args::Args::new();
     let exit_code = execute_process(Some(args.as_main_args()), None, std::ptr::null_mut());
     if exit_code >= 0 {
@@ -209,7 +209,7 @@ fn control_queue_spec(handler_guid: &str) -> ipc::MappedQueueSpec {
 fn ipc_directory() -> PathBuf {
     std::env::var_os("EBI_IPC_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("EmbeddedBrowserIpc"))
+        .unwrap_or_else(|| std::env::temp_dir().join("LichoraIpc"))
 }
 
 fn drain_control_queue(
@@ -357,7 +357,7 @@ struct UnityHandlerRunLog {
 
 impl UnityHandlerRunLog {
     fn open(handler_guid: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("headless_browser-{handler_guid}.log"));
+        let path = std::env::temp_dir().join(format!("lichora-{handler_guid}.log"));
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -778,9 +778,9 @@ impl Drop for SingleInstanceLock {
 }
 
 fn print_usage() {
-    println!("Headless Browser - Off-screen CEF browser for Unity integration");
+    println!("Lichora - embedded off-screen CEF runtime");
     println!();
-    println!("Usage: headless_browser [OPTIONS] [URL]");
+    println!("Usage: lichora [OPTIONS] [URL]");
     println!();
     println!("Options:");
     println!("  -u, --url <URL>      Initial URL to load (default: https://example.com)");
@@ -793,9 +793,9 @@ fn print_usage() {
     println!("      --help           Show this help message");
     println!();
     println!("Examples:");
-    println!("  headless_browser https://google.com");
-    println!("  headless_browser -w 1920 -h 1080 -f 30");
-    println!("  headless_browser --guid abc123 --url https://example.com");
+    println!("  lichora https://google.com");
+    println!("  lichora -w 1920 -h 1080 -f 30");
+    println!("  lichora --guid abc123 --url https://example.com");
 }
 
 fn ctrlc_handler(running: std::sync::Arc<std::sync::atomic::AtomicBool>) {
@@ -810,7 +810,7 @@ mod tests {
     use super::*;
 
     fn test_args(args: &[&str]) -> Vec<String> {
-        std::iter::once("headless_browser")
+        std::iter::once("lichora")
             .chain(args.iter().copied())
             .map(str::to_string)
             .collect()

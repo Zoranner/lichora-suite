@@ -198,7 +198,7 @@ impl BrowserEntry {
             return Ok(());
         }
 
-        info!("Initializing Headless Browser…");
+        info!("Initializing Lichora…");
         info!("  Size   : {}x{}", self.config.width, self.config.height);
         info!("  URL    : {}", self.config.url);
         info!("  GUID   : {}", self.config.memory_guid);
@@ -769,7 +769,7 @@ fn browser_input_ipc_spec(session_id: &str, browser_id: &str) -> BrowserInputIpc
 fn ipc_directory() -> std::path::PathBuf {
     std::env::var_os("EBI_IPC_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("EmbeddedBrowserIpc"))
+        .unwrap_or_else(|| std::env::temp_dir().join("LichoraIpc"))
 }
 
 #[cfg(feature = "cef")]

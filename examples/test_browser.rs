@@ -2,7 +2,7 @@
 //!
 //! Basic test to verify browser initialization
 
-use headless_browser_core::browser::BrowserEntry;
+use lichora_core::browser::BrowserEntry;
 
 fn main() {
     // Initialize logger
@@ -10,7 +10,7 @@ fn main() {
         .filter_level(log::LevelFilter::Debug)
         .init();
 
-    log::info!("=== Headless Browser Test ===");
+    log::info!("=== Lichora Test ===");
 
     // Create browser entry
     let mut browser = BrowserEntry::new();

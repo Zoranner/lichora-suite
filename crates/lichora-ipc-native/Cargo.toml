@@ -1,0 +1,17 @@
+[package]
+name = "lichora-ipc-native"
+version = "0.1.0"
+edition = "2021"
+description = "Lichora IPC native C ABI"
+license = "MIT"
+
+[lib]
+name = "lichora_ipc_native"
+path = "src/lib.rs"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+ipc = { package = "lichora-ipc", path = "../lichora-ipc" }
+
+[dev-dependencies]
+tempfile = "3.0"

@@ -1,0 +1,17 @@
+[package]
+name = "lichora-ipc"
+version = "0.1.0"
+edition = "2021"
+description = "Lichora IPC core"
+license = "MIT"
+
+[lib]
+name = "ipc"
+path = "src/lib.rs"
+
+[dependencies]
+memmap2 = "0.9"
+thiserror = "1.0"
+
+[dev-dependencies]
+tempfile = "3.0"

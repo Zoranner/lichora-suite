@@ -1,0 +1,19 @@
+{
+    "name": "KimoTech.EmbeddedBrowser.Editors",
+    "rootNamespace": "",
+    "references": [
+        "GUID:fc2aab32f5ebd1a40a1e970b81aeec22",
+        "GUID:3dcbb65762ae01440b7e7f4a08bf32bd"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

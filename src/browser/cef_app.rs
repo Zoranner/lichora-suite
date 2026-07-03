@@ -16,7 +16,7 @@ mod cef_impl {
         Arc, Mutex,
     };
 
-    /// Headless Browser Application
+    /// Lichora browser application
     #[derive(Clone)]
     pub struct HeadlessApp {
         is_cef_ready: Rc<RefCell<bool>>,

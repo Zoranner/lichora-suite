@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build Script for Linux
 #
-# Builds the Rust browser runtime and Unity native IPC plugin for Linux.
+# Builds Lichora and Unity native plugins for Linux.
 
 set -e
 
@@ -17,7 +17,7 @@ for arg in "$@"; do
             NO_CEF=1
             ;;
         --help|-h)
-            echo "Headless Browser Build Script for Linux"
+            echo "Lichora Build Script for Linux"
             echo ""
             echo "Usage: ./build.sh [OPTIONS]"
             echo ""
@@ -36,11 +36,11 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIST_DIR="$SCRIPT_DIR/dist/linux-x64"
-UNITY_PLUGIN_DIR="$SCRIPT_DIR/../BrowserRenderer/Assets/Packages/Plugins/Linux"
+UNITY_PLUGIN_DIR="$SCRIPT_DIR/hosts/unity-host/Plugins/Linux"
 
 cd "$SCRIPT_DIR"
 
-echo "=== Building Headless Browser ==="
+echo "=== Building Lichora ==="
 
 # Check CEF environment
 if [ "$NO_CEF" -eq 0 ] && [ -z "$CEF_PATH" ]; then
@@ -49,7 +49,7 @@ if [ "$NO_CEF" -eq 0 ] && [ -z "$CEF_PATH" ]; then
     exit 1
 fi
 
-BUILD_ARGS=(build -p headless_browser -p ipc_native)
+BUILD_ARGS=(build -p lichora -p lichora-ipc-native -p process-host)
 if [ "$RELEASE" -eq 1 ]; then
     BUILD_ARGS+=(--release)
     TARGET_PROFILE="release"
@@ -67,12 +67,15 @@ cargo "${BUILD_ARGS[@]}"
 TARGET_DIR="$SCRIPT_DIR/target/$TARGET_PROFILE"
 mkdir -p "$DIST_DIR"
 
-cp "$TARGET_DIR/headless_browser" "$DIST_DIR/headless_browser"
-cp "$TARGET_DIR/libipc_native.so" "$DIST_DIR/libbrowser_ipc_native.so"
+cp "$TARGET_DIR/lichora" "$DIST_DIR/lichora"
+cp "$TARGET_DIR/liblichora_ipc_native.so" "$DIST_DIR/liblichora_ipc_native.so"
+cp "$TARGET_DIR/libprocess_host.so" "$DIST_DIR/libprocess_host.so"
 
 if [ -d "$UNITY_PLUGIN_DIR" ]; then
-    cp "$TARGET_DIR/libipc_native.so" "$UNITY_PLUGIN_DIR/libbrowser_ipc_native.so"
-    echo "Copied IPC native plugin to Unity plugin dir: $UNITY_PLUGIN_DIR/libbrowser_ipc_native.so"
+    cp "$TARGET_DIR/liblichora_ipc_native.so" "$UNITY_PLUGIN_DIR/liblichora_ipc_native.so"
+    cp "$TARGET_DIR/libprocess_host.so" "$UNITY_PLUGIN_DIR/libprocess_host.so"
+    echo "Copied IPC native plugin to Unity plugin dir: $UNITY_PLUGIN_DIR/liblichora_ipc_native.so"
+    echo "Copied process host plugin to Unity plugin dir: $UNITY_PLUGIN_DIR/libprocess_host.so"
 fi
 
 if [ "$NO_CEF" -eq 0 ]; then
@@ -97,6 +100,7 @@ fi
 
 echo ""
 echo "=== Build Complete ==="
-echo "Executable: $DIST_DIR/headless_browser"
-echo "IPC native plugin: $DIST_DIR/libbrowser_ipc_native.so"
+echo "Executable: $DIST_DIR/lichora"
+echo "IPC native plugin: $DIST_DIR/liblichora_ipc_native.so"
+echo "Process host plugin: $DIST_DIR/libprocess_host.so"
 echo ""

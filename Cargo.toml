@@ -1,21 +1,32 @@
 [package]
-name = "headless_browser"
+name = "lichora"
 version = "0.1.0"
 edition = "2021"
-description = "Headless browser implementation using CEF for Unity integration"
+description = "Lichora embedded web runtime using CEF"
 authors = ["KimoTech"]
 license = "MIT"
 
 [workspace]
-members = [".", "crates/ipc", "crates/ipc_native"]
+members = [
+    ".",
+    "crates/lichora-ipc",
+    "crates/lichora-ipc-native",
+    "crates/process-host",
+]
+default-members = [
+    ".",
+    "crates/lichora-ipc",
+    "crates/lichora-ipc-native",
+    "crates/process-host",
+]
 resolver = "2"
 
 [lib]
-name = "headless_browser_core"
+name = "lichora_core"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "headless_browser"
+name = "lichora"
 path = "src/main.rs"
 
 [features]
@@ -26,7 +37,7 @@ cef = ["dep:cef"]
 # CEF bindings
 cef = { version = "145", optional = true }
 
-# File-backed memory maps for EmbeddedBrowser IPC v2
+# File-backed memory maps for Lichora IPC v2
 memmap2 = "0.9"
 
 # Async runtime
@@ -53,8 +64,8 @@ cfg-if = "1.0"
 # Ctrl+C handling
 ctrlc = "3.4"
 
-# EmbeddedBrowser IPC v2 core
-ipc = { path = "crates/ipc" }
+# Lichora IPC v2 core
+ipc = { package = "lichora-ipc", path = "crates/lichora-ipc" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Linux-specific dependencies

@@ -1,12 +1,12 @@
-//! Headless Browser Rust - CEF-based browser for Unity integration
+//! Lichora Rust runtime - CEF-based embedded web runtime.
 //!
-//! This library provides a CEF-based headless browser implementation
-//! using shared memory for communication with Unity.
+//! This library provides a CEF-based embedded web runtime using shared memory
+//! for communication with host engines.
 //!
 //! # Features
 //!
 //! - Off-screen rendering via CEF
-//! - Shared memory IPC with Unity
+//! - Shared memory IPC with host engines
 //! - Full input support (mouse, keyboard, IME)
 //! - JavaScript execution
 //! - DevTools support
@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use headless_browser_core::browser::{BrowserEntry, BrowserConfig};
+//! use lichora_core::browser::{BrowserEntry, BrowserConfig};
 //!
 //! let config = BrowserConfig {
 //!     width: 1280,
@@ -40,9 +40,9 @@ pub mod modules;
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Initialize the headless browser (FFI entry point)
+/// Initialize Lichora (FFI entry point)
 #[no_mangle]
-pub extern "C" fn headless_browser_init() -> i32 {
+pub extern "C" fn lichora_init() -> i32 {
     // Initialize logger for FFI callers
     let _ = env_logger::builder()
         .filter_level(log::LevelFilter::Info)
@@ -51,16 +51,16 @@ pub extern "C" fn headless_browser_init() -> i32 {
     0
 }
 
-/// Shutdown the headless browser (FFI entry point)
+/// Shutdown Lichora (FFI entry point)
 #[no_mangle]
-pub extern "C" fn headless_browser_shutdown() -> i32 {
+pub extern "C" fn lichora_shutdown() -> i32 {
     browser::shutdown_browser_runtime();
     0
 }
 
 /// Get library version (FFI entry point)
 #[no_mangle]
-pub extern "C" fn headless_browser_version() -> *const i8 {
+pub extern "C" fn lichora_version() -> *const i8 {
     static VERSION_BYTES: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
     VERSION_BYTES.as_ptr() as *const i8
 }

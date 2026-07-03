@@ -85,7 +85,7 @@ pub(crate) fn browser_output_ipc_spec(session_id: &str, browser_id: &str) -> Bro
 fn ipc_directory() -> std::path::PathBuf {
     std::env::var_os("EBI_IPC_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("EmbeddedBrowserIpc"))
+        .unwrap_or_else(|| std::env::temp_dir().join("LichoraIpc"))
 }
 
 #[cfg(test)]

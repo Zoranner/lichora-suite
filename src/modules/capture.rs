@@ -79,7 +79,7 @@ fn open_or_create_frame_channel(session_id: &str, browser_id: &str) -> Result<ip
 fn ipc_directory() -> std::path::PathBuf {
     std::env::var_os("EBI_IPC_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("EmbeddedBrowserIpc"))
+        .unwrap_or_else(|| std::env::temp_dir().join("LichoraIpc"))
 }
 
 #[cfg(test)]

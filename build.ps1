@@ -1,6 +1,6 @@
 # Build Script for Windows
 #
-# Builds the headless browser for Windows and assembles dist/win-x64.
+# Builds Lichora for Windows and assembles dist/win-x64.
 
 param(
     [switch]$Release,
@@ -11,7 +11,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ($Help) {
-    Write-Host "Headless Browser Build Script for Windows" -ForegroundColor Cyan
+    Write-Host "Lichora Build Script for Windows" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Usage: .\build.ps1 [OPTIONS]"
     Write-Host ""
@@ -29,7 +29,7 @@ if ($Help) {
 
 $DistDir = Join-Path $PSScriptRoot "dist\win-x64"
 
-Write-Host "=== Building Headless Browser ===" -ForegroundColor Cyan
+Write-Host "=== Building Lichora ===" -ForegroundColor Cyan
 
 # Check CEF environment
 if (-not $NoCEF) {
@@ -49,7 +49,7 @@ if (-not $NoCEF) {
 }
 
 # Build command
-$BuildArgs = @("build", "-p", "headless_browser", "-p", "ipc_native")
+$BuildArgs = @("build", "-p", "lichora", "-p", "lichora-ipc-native", "-p", "process-host")
 
 if ($Release) {
     $BuildArgs += "--release"
@@ -83,20 +83,22 @@ if ($LASTEXITCODE -eq 0) {
         $TargetDir = Join-Path $PSScriptRoot "target\debug"
     }
 
-    $BinaryPath = Join-Path $TargetDir "headless_browser.exe"
+    $BinaryPath = Join-Path $TargetDir "lichora.exe"
     $PdbPaths = @(
-        (Join-Path $TargetDir "headless_browser.pdb"),
-        (Join-Path $TargetDir "headless_browser_core.pdb"),
-        (Join-Path $TargetDir "ipc_native.pdb")
+        (Join-Path $TargetDir "lichora.pdb"),
+        (Join-Path $TargetDir "lichora_core.pdb"),
+        (Join-Path $TargetDir "lichora_ipc_native.pdb"),
+        (Join-Path $TargetDir "process_host.pdb")
     )
-    $IpcNativePath = Join-Path $TargetDir "ipc_native.dll"
-    $IpcNativeOutputName = "browser_ipc_native.dll"
-    $UnityPluginDir = Join-Path $PSScriptRoot "..\BrowserRenderer\Assets\Packages\Plugins\Windows"
+    $IpcNativePath = Join-Path $TargetDir "lichora_ipc_native.dll"
+    $IpcNativeOutputName = "lichora_ipc_native.dll"
+    $ProcessHostPath = Join-Path $TargetDir "process_host.dll"
+    $UnityPluginDir = Join-Path $PSScriptRoot "hosts\unity-host\Plugins\Windows"
 
     if (Test-Path $BinaryPath) {
         Write-Host "Executable: $BinaryPath" -ForegroundColor Green
         New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
-        Copy-Item -Path $BinaryPath -Destination (Join-Path $DistDir "headless_browser.exe") -Force
+        Copy-Item -Path $BinaryPath -Destination (Join-Path $DistDir "lichora.exe") -Force
         Write-Host "Copied executable to: $DistDir" -ForegroundColor Green
     }
     foreach ($PdbPath in $PdbPaths) {
@@ -120,10 +122,30 @@ if ($LASTEXITCODE -eq 0) {
                 Write-Host "Reason: $($_.Exception.Message)" -ForegroundColor Yellow
             }
         } else {
-            Write-Host "Unity plugin dir not found; IPC native DLL was not copied to BrowserRenderer." -ForegroundColor Yellow
+            Write-Host "Unity plugin dir not found; IPC native DLL was not copied to hosts/unity-host." -ForegroundColor Yellow
         }
     } else {
         Write-Host "Warning: IPC native DLL not found at $IpcNativePath" -ForegroundColor Yellow
+    }
+
+    if (Test-Path $ProcessHostPath) {
+        New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+        Copy-Item -Path $ProcessHostPath -Destination (Join-Path $DistDir "process_host.dll") -Force
+        Write-Host "Copied process host DLL to: $DistDir\process_host.dll" -ForegroundColor Green
+
+        if (Test-Path $UnityPluginDir) {
+            $UnityProcessHostPath = Join-Path $UnityPluginDir "process_host.dll"
+            try {
+                Copy-Item -Path $ProcessHostPath -Destination $UnityProcessHostPath -Force
+                Write-Host "Copied process host DLL to Unity plugin dir: $UnityProcessHostPath" -ForegroundColor Green
+            } catch {
+                Write-Host "Warning: process host DLL was built and copied to dist, but Unity plugin DLL could not be updated." -ForegroundColor Yellow
+                Write-Host "Path: $UnityProcessHostPath" -ForegroundColor Yellow
+                Write-Host "Reason: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    } else {
+        Write-Host "Warning: process host DLL not found at $ProcessHostPath" -ForegroundColor Yellow
     }
 
     Write-Host ""

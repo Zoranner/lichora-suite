@@ -518,29 +518,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 
 [[package]]
-name = "headless_browser"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cc",
- "cef",
- "cfg-if",
- "ctrlc",
- "env_logger",
- "ipc",
- "libc",
- "log",
- "memmap2",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "uuid",
- "winapi",
-]
-
-[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -696,23 +673,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ipc"
-version = "0.1.0"
-dependencies = [
- "memmap2",
- "tempfile",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "ipc_native"
-version = "0.1.0"
-dependencies = [
- "ipc",
- "tempfile",
-]
-
-[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -796,6 +756,46 @@ dependencies = [
  "libc",
  "plain",
  "redox_syscall 0.7.3",
+]
+
+[[package]]
+name = "lichora"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cc",
+ "cef",
+ "cfg-if",
+ "ctrlc",
+ "env_logger",
+ "libc",
+ "lichora-ipc",
+ "log",
+ "memmap2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+ "winapi",
+]
+
+[[package]]
+name = "lichora-ipc"
+version = "0.1.0"
+dependencies = [
+ "memmap2",
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "lichora-ipc-native"
+version = "0.1.0"
+dependencies = [
+ "lichora-ipc",
+ "tempfile",
 ]
 
 [[package]]
@@ -1013,6 +1013,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "process-host"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

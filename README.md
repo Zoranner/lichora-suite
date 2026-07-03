@@ -1,42 +1,53 @@
-# Headless Browser
+# Lichora
 
-Rust/CEF headless browser process for the Unity `EmbeddedBrowser` package.
+Lichora 是面向宿主应用的可嵌入 Web Surface 运行时。当前实现基于 Rust、CEF OSR 和 typed IPC，可以把网页渲染成宿主可消费的 BGRA frame，并通过 IPC 接收输入、发布输出事件和状态诊断。
 
-当前主链路是 Rust typed IPC：Unity 启动一个 `headless_browser.exe` 进程，浏览器实例、输入、渲染帧、输出事件和状态诊断通过 Rust 共享 IPC core 通信。`headless_browser` 直接使用 Rust API，Unity 通过原生插件调用同一个 core。
+当前首个宿主适配是 Unity，位于 `hosts/unity-host`。核心 runtime、IPC crate 和发布产物统一使用 Lichora 命名。
 
 ## 当前状态
 
-- Windows 目标产物为 `dist/win-x64/headless_browser.exe` 和 `dist/win-x64/browser_ipc_native.dll`。
-- Linux 目标产物为 `dist/linux-x64/headless_browser` 和 `dist/linux-x64/libbrowser_ipc_native.so`。
-- Cargo root package 的 binary target 仍叫 `headless_browser`，library target 显式命名为 `headless_browser_core`，避免 Windows MSVC 下同包 bin/lib 同名时争用 `headless_browser.pdb`。
+- Windows 目标产物为 `dist/win-x64/lichora.exe`、`dist/win-x64/lichora_ipc_native.dll` 和 `dist/win-x64/process_host.dll`。
+- Linux 目标产物为 `dist/linux-x64/lichora`、`dist/linux-x64/liblichora_ipc_native.so` 和 `dist/linux-x64/libprocess_host.so`。
+- Cargo root package 的 binary target 叫 `lichora`，library target 显式命名为 `lichora_core`，避免 Windows MSVC 下同包 bin/lib 同名时争用 PDB。
 - `dist/win-x64` 同时放置 CEF runtime 文件，例如 `libcef.dll`、pak/dat/bin 文件和 `locales/`。
-- IPC v2 架构和 wire format 见 `../docs/design/architecture.md`。
+- IPC v2 架构、wire format 和浏览器能力设计由本仓库文档维护。
 - Capture 使用 `FrameRing` 一等通道。
 - Mouse move 使用 latest-only 状态；点击、滚轮、键盘、IME 和脚本请求使用 typed queue。
 - Status page 是必需通道，用于定位输入积压、丢帧、ack 延迟和进程状态。
+- Web/Host 融合和 PassMap 设计见 `docs/design/web-host-overlay.md`。
 
 ## 项目结构
 
 ```text
-headless_browser/
+lichora/
 ├── Cargo.toml
 ├── Cargo.lock
 ├── build.ps1
 ├── build.sh
 ├── dist/
 │   └── win-x64/
-│       ├── headless_browser.exe
-│       ├── browser_ipc_native.dll
+│       ├── lichora.exe
+│       ├── lichora_ipc_native.dll
+│       ├── process_host.dll
 │       ├── libcef.dll
 │       ├── *.pak / *.dat / *.bin
 │       └── locales/
+├── crates/
+│   ├── lichora-ipc/
+│   ├── lichora-ipc-native/
+│   └── process-host/
+├── hosts/
+│   └── unity-host/
 ├── src/
 │   ├── main.rs
 │   ├── browser/
 │   ├── ipc/
 │   └── modules/
-├── DEVELOPMENT.md
-└── PROTOCOL.md
+└── docs/
+    ├── development.md
+    ├── protocol.md
+    └── design/
+        └── web-host-overlay.md
 ```
 
 ## Windows 发布目录
@@ -54,12 +65,13 @@ dist/win-x64/
 
 该目录必须包含：
 
-- `headless_browser.exe`
-- `browser_ipc_native.dll`，供 Unity `BrowserIpcNative` 通过 `DllImport("browser_ipc_native")` 加载
+- `lichora.exe`
+- `lichora_ipc_native.dll`，供 Unity `BrowserIpcNative` 通过 `DllImport("lichora_ipc_native")` 加载
+- `process_host.dll`，供 Unity `NativeProcessSpawner` 通过 `DllImport("process_host")` 加载
 - CEF runtime：`libcef.dll`、`chrome_elf.dll`、`icudtl.dat`、`resources.pak`、`chrome_*.pak`、`v8_context_snapshot.bin`、`locales/` 等
-- 可选调试文件：`headless_browser.pdb`、`headless_browser_core.pdb`、`ipc_native.pdb`
+- 可选调试文件：`lichora.pdb`、`lichora_core.pdb`、`lichora_ipc_native.pdb`、`process_host.pdb`
 
-同一 DLL 还会复制到 `../BrowserRenderer/Assets/Packages/Plugins/Windows/browser_ipc_native.dll`，这是 Unity Windows 插件加载位置。不要把 `target/` 或 `dist/` 产物提交到 Git；需要版本化 Unity 插件二进制时，应连同对应 `.meta` 一起纳入 `BrowserRenderer` 仓库。
+native 插件还会复制到 `hosts/unity-host/Plugins/Windows/`，这是 Unity Windows 插件加载位置。不要把 `target/` 或 `dist/` 产物提交到 Git；需要版本化 Unity 插件二进制时，应连同对应 `.meta` 一起纳入 `hosts/unity-host`。
 
 `dist/win-x64/debug.log` 是运行期日志，不应提交。
 
@@ -76,14 +88,14 @@ Linux 发布构建：
 dist/linux-x64/
 ```
 
-该目录包含 `headless_browser` 和 `libbrowser_ipc_native.so`。同一 native IPC 插件会复制到 `../BrowserRenderer/Assets/Packages/Plugins/Linux/libbrowser_ipc_native.so`，供 Unity Linux Editor/Player 加载。CEF runtime 文件会在 `CEF_PATH` 可用时复制到发布目录。
+该目录包含 `lichora`、`liblichora_ipc_native.so` 和 `libprocess_host.so`。native 插件会复制到 `hosts/unity-host/Plugins/Linux/`，供 Unity Linux Editor/Player 加载。CEF runtime 文件会在 `CEF_PATH` 可用时复制到发布目录。
 
 ## Unity handler 模式
 
 Unity 侧启动 handler 进程时，第一个非选项参数是 handler GUID：
 
 ```powershell
-.\dist\win-x64\headless_browser.exe 12345678-1234-1234-1234-123456789abc --graphics-mode=auto
+.\dist\win-x64\lichora.exe 12345678-1234-1234-1234-123456789abc --graphics-mode=auto
 ```
 
 进程启动后创建 IPC v2 session，并通过 `control`、`status`、`input`、`frame` 和 `output` 通道完成浏览器管理、输入、帧发布和诊断。原生插件输入、帧和输出热路径统一使用 `ebi_browser_input_open`、`ebi_browser_frame_open` 和 `ebi_browser_output_open` 得到的 typed browser handle；旧 `*_for_browser` session-handle 兼容导出已移除。
@@ -93,7 +105,7 @@ Unity 侧启动 handler 进程时，第一个非选项参数是 handler GUID：
 单 URL 模式仍可用于本地手工调试：
 
 ```powershell
-.\target\release\headless_browser.exe --url https://example.com --width 1280 --height 720
+.\target\release\lichora.exe --url https://example.com --width 1280 --height 720
 ```
 
 不要把单 URL 模式写成 Unity 集成入口；Unity 集成入口是 handler GUID 模式。
@@ -109,10 +121,10 @@ Unity 侧启动 handler 进程时，第一个非选项参数是 handler GUID：
 | `frame` | Browser -> Unity | BGRA frame ring 和 dirty rect |
 | `output` | Browser -> Unity | caret、surrounding text、脚本结果和页面事件 |
 
-详细设计见 [Architecture](../docs/design/architecture.md)。`PROTOCOL.md` 记录当前协议入口和验证边界。
+`docs/protocol.md` 记录当前协议入口和验证边界。
 
 ## 开发文档
 
-- [DEVELOPMENT.md](DEVELOPMENT.md)
-- [PROTOCOL.md](PROTOCOL.md)
-- [Architecture](../docs/design/architecture.md)
+- [Development](docs/development.md)
+- [Protocol](docs/protocol.md)
+- [Web/Host Overlay Design](docs/design/web-host-overlay.md)
