@@ -13,7 +13,8 @@ namespace KimoTech.LichoraHost
             IPointerMoveHandler,
             IPointerDownHandler,
             IPointerUpHandler,
-            IScrollHandler
+            IScrollHandler,
+            ICanvasRaycastFilter
     {
         protected MouseState _MouseState;
         protected readonly ConcurrentQueue<KeyboardState> _KeyboardEvents =
@@ -22,6 +23,9 @@ namespace KimoTech.LichoraHost
         protected string _InputString = "";
         private BrowserFocusController _FocusController;
         private BrowserPointerInputSource _PointerInputSource;
+        private BrowserCoordinateMapper _CoordinateMapper;
+        private PassHitFilter _PassHitFilter;
+        private bool _BrowserPointerCaptured;
 
         private RectTransform _RectTransform;
         protected RectTransform RectTransform
@@ -41,6 +45,30 @@ namespace KimoTech.LichoraHost
         public string CompositionString => _CompositionString;
         public string InputString => _InputString;
 
+        public BrowserOverlaySettings OverlaySettings
+        {
+            get => HitFilter.Settings;
+            set => HitFilter.Settings = value;
+        }
+
+        public bool IsRaycastLocationValid(Vector2 screenPosition, Camera eventCamera)
+        {
+            if (_BrowserPointerCaptured)
+            {
+                return true;
+            }
+
+            var isBrowserHit = HitFilter.IsBrowserHit(screenPosition, eventCamera);
+            if (!isBrowserHit && IsMouseButtonDown())
+            {
+                _FocusController?.FocusOut();
+                PointerInputSource.Exit();
+                SyncMouseState();
+            }
+
+            return isBrowserHit;
+        }
+
         public void OnPointerEnter(PointerEventData eventData)
         {
             PointerInputSource.Enter();
@@ -49,18 +77,34 @@ namespace KimoTech.LichoraHost
 
         public void OnPointerExit(PointerEventData eventData)
         {
+            if (_BrowserPointerCaptured)
+            {
+                return;
+            }
+
             PointerInputSource.Exit();
             SyncMouseState();
         }
 
         public void OnPointerMove(PointerEventData eventData)
         {
+            if (!ShouldHandlePointerEvent(eventData, allowCapturedPointer: true))
+            {
+                return;
+            }
+
             PointerInputSource.Move(eventData);
             SyncMouseState();
         }
 
         public void OnPointerDown(PointerEventData eventData)
         {
+            if (!ShouldHandlePointerEvent(eventData, allowCapturedPointer: false))
+            {
+                return;
+            }
+
+            _BrowserPointerCaptured = true;
             FocusController.FocusIn();
 
             PointerInputSource.Press(eventData);
@@ -69,12 +113,23 @@ namespace KimoTech.LichoraHost
 
         public void OnPointerUp(PointerEventData eventData)
         {
+            if (!ShouldHandlePointerEvent(eventData, allowCapturedPointer: true))
+            {
+                return;
+            }
+
             PointerInputSource.Release(eventData);
+            _BrowserPointerCaptured = false;
             SyncMouseState();
         }
 
         public void OnScroll(PointerEventData eventData)
         {
+            if (!ShouldHandlePointerEvent(eventData, allowCapturedPointer: false))
+            {
+                return;
+            }
+
             PointerInputSource.Scroll(eventData);
             SyncMouseState();
         }
@@ -82,6 +137,13 @@ namespace KimoTech.LichoraHost
         public void ResetFrameDeltas()
         {
             PointerInputSource.ResetFrameDeltas();
+            SyncMouseState();
+        }
+
+        public void ResetPointerState()
+        {
+            _BrowserPointerCaptured = false;
+            PointerInputSource.Reset();
             SyncMouseState();
         }
 
@@ -246,6 +308,13 @@ namespace KimoTech.LichoraHost
             return modifiers;
         }
 
+        private static bool IsMouseButtonDown()
+        {
+            return Input.GetMouseButtonDown(0)
+                || Input.GetMouseButtonDown(1)
+                || Input.GetMouseButtonDown(2);
+        }
+
         public void ReleaseFocus()
         {
             FocusController.FocusOut();
@@ -276,13 +345,52 @@ namespace KimoTech.LichoraHost
             {
                 if (_PointerInputSource == null)
                 {
-                    _PointerInputSource = new BrowserPointerInputSource(
-                        new BrowserCoordinateMapper(RectTransform)
-                    );
+                    _PointerInputSource = new BrowserPointerInputSource(CoordinateMapper);
                 }
 
                 return _PointerInputSource;
             }
+        }
+
+        private BrowserCoordinateMapper CoordinateMapper
+        {
+            get
+            {
+                if (_CoordinateMapper == null)
+                {
+                    _CoordinateMapper = new BrowserCoordinateMapper(RectTransform);
+                }
+
+                return _CoordinateMapper;
+            }
+        }
+
+        private PassHitFilter HitFilter
+        {
+            get
+            {
+                if (_PassHitFilter == null)
+                {
+                    _PassHitFilter = new PassHitFilter(CoordinateMapper, null);
+                }
+
+                return _PassHitFilter;
+            }
+        }
+
+        private bool ShouldHandlePointerEvent(PointerEventData eventData, bool allowCapturedPointer)
+        {
+            if (allowCapturedPointer && _BrowserPointerCaptured)
+            {
+                return true;
+            }
+
+            return HitFilter.IsBrowserHit(
+                eventData.position,
+                eventData.pressEventCamera != null
+                    ? eventData.pressEventCamera
+                    : eventData.enterEventCamera
+            );
         }
 
         private void SyncMouseState()

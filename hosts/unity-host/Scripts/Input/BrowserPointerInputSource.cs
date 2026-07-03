@@ -55,6 +55,11 @@ namespace KimoTech.LichoraHost
             _State.Delta = Vector2.zero;
         }
 
+        public void Reset()
+        {
+            _State = default;
+        }
+
         private void SetButton(PointerEventData.InputButton button, bool pressed)
         {
             switch (button)

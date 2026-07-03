@@ -27,6 +27,11 @@ namespace KimoTech.LichoraHost
 
         public bool FilteredColor = false;
 
+        [SerializeField]
+        private BrowserOverlaySettings _OverlaySettings = new BrowserOverlaySettings();
+
+        public BrowserOverlaySettings OverlaySettings => _OverlaySettings;
+
         // BrowserRender.shader 按 Unity UI 管线适配，统一处理 Y 轴翻转和背景色剔除。
         private void Awake()
         {
@@ -36,6 +41,8 @@ namespace KimoTech.LichoraHost
             {
                 _InputController = gameObject.AddComponent<BrowserInputController>();
             }
+
+            _InputController.OverlaySettings = _OverlaySettings;
 
             var width = (int)RectTransform.rect.width;
             var height = (int)RectTransform.rect.height;
@@ -114,6 +121,7 @@ namespace KimoTech.LichoraHost
 
         private void DestroyHandlerForBrowserRestart()
         {
+            _InputController.ResetPointerState();
             _InputController.FocusController.UnbindImeInputSink();
 
             _Handler?.DestroyForBrowserRestart();
