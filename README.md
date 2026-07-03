@@ -35,9 +35,12 @@ lichora/
 ├── crates/
 │   ├── lichora-ipc/
 │   ├── lichora-ipc-native/
+│   ├── native-ime/
 │   └── process-host/
 ├── hosts/
 │   └── unity-host/
+├── packages/
+│   └── overlay/
 ├── src/
 │   ├── main.rs
 │   ├── browser/

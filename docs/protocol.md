@@ -5,8 +5,8 @@
 当前 source of truth：
 
 ```text
-../crates/ipc/src
-../crates/ipc/tests
+../crates/lichora-ipc/src
+../crates/lichora-ipc/tests
 ```
 
-协议字段、通道语义和 wire format 以 `../crates/ipc` 源码和 golden tests 为准。旧协议字段表已移除，不再维护运行时兼容说明。Web/Host 融合扩展设计见 `design/web-host-overlay.md`。
+协议字段、通道语义和 wire format 以 `../crates/lichora-ipc` 源码和 golden tests 为准。旧协议字段表已移除，不再维护运行时兼容说明。Web/Host 融合扩展设计见 `design/web-host-overlay.md`。
