@@ -6,7 +6,7 @@ Windows：
 
 - Rust toolchain
 - Visual Studio Build Tools
-- CEF 145.0.27 runtime，默认由 `setup-windows.ps1` 下载到 `%LOCALAPPDATA%\Lichora\cef\145.0.27-windows64` 并通过 `CEF_PATH` 指向
+- CEF 145.0.27，默认由 `setup-windows.ps1` 下载到 `%LOCALAPPDATA%\Lichora\cef\145.0.27-windows64` 并通过 `CEF_PATH` 指向。该目录不是单纯 runtime 目录，还必须包含 `CMakeLists.txt`、`cmake/`、`include/`、`libcef_dll/` 和 `archive.json`，供 `cef-dll-sys` 构建 `libcef_dll_wrapper`。
 
 Linux：
 
@@ -37,6 +37,8 @@ dist/win-x64/
 ```
 
 该目录是宿主适配层应引用的 Windows runtime 目录。`debug.log` 是 CEF 运行期日志，已通过 `.gitignore` 排除。
+
+`CEF_PATH` 指向开发机上的 CEF 根目录，`dist/win-x64` 才是运行时发布目录。不要把只含 `libcef.dll`、pak/dat/bin 和 `locales/` 的旧运行时目录设置为 `CEF_PATH`，否则 CEF 绑定 crate 无法编译。
 
 Linux 发布构建：
 

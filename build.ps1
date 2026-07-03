@@ -42,8 +42,23 @@ if (-not $NoCEF) {
     } else {
         Write-Host "CEF_PATH: $env:CEF_PATH" -ForegroundColor Green
 
-        if (-not (Test-Path "$env:CEF_PATH\libcef.dll")) {
-            Write-Host "Warning: libcef.dll not found in CEF_PATH" -ForegroundColor Yellow
+        $RequiredCefPaths = @(
+            "libcef.dll",
+            "resources.pak",
+            "locales",
+            "CMakeLists.txt",
+            "cmake",
+            "include",
+            "libcef_dll",
+            "archive.json"
+        )
+        $MissingCefPaths = $RequiredCefPaths | Where-Object { -not (Test-Path (Join-Path $env:CEF_PATH $_)) }
+        if ($MissingCefPaths.Count -gt 0) {
+            Write-Host "Warning: CEF_PATH does not contain the full CEF build layout." -ForegroundColor Yellow
+            foreach ($MissingCefPath in $MissingCefPaths) {
+                Write-Host "  Missing: $MissingCefPath" -ForegroundColor Yellow
+            }
+            Write-Host "Run .\setup-windows.ps1 to install the layout expected by cef-dll-sys." -ForegroundColor Yellow
         }
     }
 }
