@@ -1,6 +1,6 @@
-# Lichora Unity Host
+# Lichora Host
 
-Lichora Unity Host is a Unity package for rendering and interacting with web pages through the Lichora runtime.
+Lichora Host is a Unity package for rendering and interacting with web pages through the Lichora runtime.
 
 ## Runtime Model
 
