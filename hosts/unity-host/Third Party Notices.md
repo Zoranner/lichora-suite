@@ -22,7 +22,7 @@ This package contains native binaries and runtime bridges used by Lichora.
 
 ## libnative_ime.so
 
-- Source: `third_party/native-ime`
+- Source: `crates/native-ime`
 - License: MIT OR Apache-2.0
 - Purpose: Linux native IME bridge for IBus, Fcitx 4 and Fcitx5.
 
