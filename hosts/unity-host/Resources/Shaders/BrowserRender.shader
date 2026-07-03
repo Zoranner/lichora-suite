@@ -1,4 +1,4 @@
-Shader "KimoTech/EmbeddedBrowser/BrowserRender"
+Shader "KimoTech/LichoraHost/BrowserRender"
 {
     Properties
     {

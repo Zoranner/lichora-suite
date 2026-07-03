@@ -1,5 +1,5 @@
 // ============================================================
-// Project: EmbeddedBrowser
+// Project: LichoraHost
 // Author: yangxinran@EN01-210826-09
 // Datetime: 2024-04-08 10:41:15
 // Description: Browser process launcher.
@@ -23,9 +23,9 @@ namespace KimoTech.LichoraHost
             if (string.IsNullOrWhiteSpace(path))
             {
                 Debug.LogError(
-                    "[BrowserHandler] HeadlessBrowser path is not configured. "
+                    "[BrowserHandler] Lichora runtime path is not configured. "
                         + "Create BrowserConfig.json in the application directory "
-                        + "with content: { \"Path\": \"/path/to/HeadlessBrowser\" }"
+                        + "with content: { \"Path\": \"/path/to/lichora.exe\" }"
                 );
             }
 

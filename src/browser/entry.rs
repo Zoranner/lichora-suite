@@ -1002,9 +1002,7 @@ fn cache_path() -> String {
     let base = std::env::var("LOCALAPPDATA")
         .or_else(|_| std::env::var("HOME").map(|home| format!("{home}/.local/share")))
         .unwrap_or_else(|_| ".".to_string());
-    let path = std::path::Path::new(&base)
-        .join("HeadlessBrowser")
-        .join("Cache");
+    let path = std::path::Path::new(&base).join("Lichora").join("Cache");
     if let Err(error) = std::fs::create_dir_all(&path) {
         warn!("Failed to create cache directory: {error}");
     }

@@ -69,7 +69,7 @@ mod cef_impl {
 
             fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
                 Some(BrowserProcessHandlerBuilder::build(
-                    HeadlessBrowserProcessHandler::new(self.app.is_cef_ready.clone()),
+                    LichoraProcessHandler::new(self.app.is_cef_ready.clone()),
                 ))
             }
         }
@@ -83,11 +83,11 @@ mod cef_impl {
 
     /// Browser Process Handler
     #[derive(Clone)]
-    pub struct HeadlessBrowserProcessHandler {
+    pub struct LichoraProcessHandler {
         is_cef_ready: Rc<RefCell<bool>>,
     }
 
-    impl HeadlessBrowserProcessHandler {
+    impl LichoraProcessHandler {
         pub fn new(is_cef_ready: Rc<RefCell<bool>>) -> Self {
             Self { is_cef_ready }
         }
@@ -95,7 +95,7 @@ mod cef_impl {
 
     wrap_browser_process_handler! {
         pub struct BrowserProcessHandlerBuilder {
-            handler: HeadlessBrowserProcessHandler,
+            handler: LichoraProcessHandler,
         }
 
         impl BrowserProcessHandler {
@@ -109,7 +109,7 @@ mod cef_impl {
     }
 
     impl BrowserProcessHandlerBuilder {
-        pub fn build(handler: HeadlessBrowserProcessHandler) -> BrowserProcessHandler {
+        pub fn build(handler: LichoraProcessHandler) -> BrowserProcessHandler {
             Self::new(handler)
         }
     }

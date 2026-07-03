@@ -172,9 +172,9 @@ namespace KimoTech.LichoraHost
             }
 
             Debug.LogWarning(
-                $"[BrowserStatic] HeadlessBrowser exited unexpectedly "
+                $"[BrowserStatic] Lichora runtime exited unexpectedly "
                     + $"(PID={exitInfo.Pid}, code={exitInfo.ExitCode}, wasStopping={exitInfo.WasStopping}). "
-                    + "Check HeadlessBrowser logs for shutdown reason, then scheduling restart."
+                    + "Check Lichora runtime logs for shutdown reason, then scheduling restart."
             );
             RequestRestart();
         }
@@ -244,8 +244,8 @@ namespace KimoTech.LichoraHost
         }
 
         /// <summary>
-        /// 向 HeadlessBrowser 发送 IPC v2 Shutdown 控制命令。
-        /// HeadlessBrowser 收到后会清理所有 CEF 资源并退出进程。
+        /// 向 Lichora runtime 发送 IPC v2 Shutdown 控制命令。
+        /// Lichora runtime 收到后会清理所有 CEF 资源并退出进程。
         /// </summary>
         private void SendShutdown()
         {

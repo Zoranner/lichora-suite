@@ -11,7 +11,7 @@ use std::time::Duration;
 use lichora_core::browser::{shutdown_browser_runtime, BrowserConfig, BrowserEntry};
 use log::{error, info, warn};
 
-const SINGLE_INSTANCE_LOCK: &str = "com.kimtech.headless-browser";
+const SINGLE_INSTANCE_LOCK: &str = "com.kimotech.lichora";
 
 fn main() {
     if is_cef_subprocess() {
@@ -30,7 +30,7 @@ fn main() {
     let args = parse_args();
     let Some(_instance_lock) = SingleInstanceLock::acquire(SINGLE_INSTANCE_LOCK) else {
         error!(
-            "HeadlessBrowser single-instance lock is already held: {}. handlerGuid={}",
+            "Lichora single-instance lock is already held: {}. handlerGuid={}",
             SINGLE_INSTANCE_LOCK, args.guid
         );
         std::process::exit(73);

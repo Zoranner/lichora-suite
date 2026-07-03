@@ -1,5 +1,5 @@
 // ============================================================
-// Project: EmbeddedBrowser
+// Project: LichoraHost
 // Author: yangxinran@EN01-210826-09
 // Datetime: 2024-04-08 10:15:32
 // Description: Inspector binding for PageRenderer.
