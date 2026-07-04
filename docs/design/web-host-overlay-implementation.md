@@ -174,16 +174,16 @@ PassRegion
 
 ## IPC 扩展
 
-在 Unity 本地输入链路稳定后，再扩展 IPC：
+当前 IPC typed output 已经包含 `OverlayPassMap`，用于让宿主消费结构化 pass map。Web SDK 和 Rust bridge 尚未完成，因此当前还不能把网页声明自动推送为该 typed payload。
 
-Rust `crates/lichora-ipc/src/typed_payload.rs` 新增：
+Rust `crates/lichora-ipc/src/typed_payload.rs` 当前定义：
 
 ```text
 OutputPayloadKind::OverlayPassMap = 5
 OutputPayload::OverlayPassMap(OverlayPassMapOutput)
 ```
 
-编码建议：
+`EBOP` 版本 1.0 header 后的 payload 编码：
 
 ```text
 u64 version
@@ -209,7 +209,9 @@ f32 width
 f32 height
 ```
 
-Unity 端 `BrowserIpcOutputPayload` 解码该结构，但不直接改输入状态。它只把 `OverlayPassMap` 交给 `BrowserOutputPump`，再由 `BrowserInputRouter` 的 pass map store 消费。
+第一版只支持 `shape = 1` 的矩形区域，坐标使用 CSS viewport 坐标。宿主在 pass map 无效、过期或与当前 viewport 不匹配时默认浏览器接收输入。
+
+Unity host 当前已通过 `BrowserIpcOutputPayload` 解码该结构，并由 `BrowserOutputPump` 分发给 `BrowserOverlayPassMapStore`，把有效矩形转换为动态 pass rect。
 
 当前 Rust output channel 同时 publish latest 和 queue。`OverlayPassMap` 应作为 latest state 读取；DOM bridge 普通事件后续走 queue，不与 pass map 混用。
 
@@ -326,12 +328,14 @@ src/modules/overlay.rs
 
 目标：让宿主能消费结构化 overlay pass map。
 
+当前进度：Rust IPC typed payload 和 Unity host typed payload 消费已落地；网页端 SDK 与 Rust bridge 尚未落地，仍在下一阶段。
+
 交付：
 
 - Rust typed payload 增加 `OverlayPassMap`。
 - Rust golden tests 覆盖编码。
 - Unity output payload decoder 增加 `OverlayPassMap`。
-- `BrowserOutputPump` 更新 `PassMap` store。
+- `BrowserOutputPump` 分发 `OverlayPassMap`，`BrowserOverlayPassMapStore` 更新动态 pass rect。
 - 文档更新 `docs/protocol.md`。
 
 验证：
