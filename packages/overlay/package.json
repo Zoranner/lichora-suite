@@ -4,6 +4,9 @@
     "private": true,
     "description": "Web-side pass map SDK boundary for Lichora controlled overlays.",
     "type": "module",
+    "scripts": {
+        "test": "bun test"
+    },
     "exports": {
         ".": "./src/index.ts"
     },
