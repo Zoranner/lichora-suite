@@ -4,5 +4,6 @@ namespace KimoTech.LichoraHost
     {
         FullBrowserSurface,
         StaticPassRects,
+        DomPassMap,
     }
 }

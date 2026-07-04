@@ -22,6 +22,7 @@ namespace KimoTech.LichoraHost
             int width,
             int height,
             RectTransform rectTransform,
+            BrowserOverlaySettings overlaySettings,
             BrowserIpcInputWriter ipcInputWriter,
             BrowserIpcFrameReader ipcFrameReader,
             BrowserIpcOutputReader ipcOutputReader
@@ -50,7 +51,13 @@ namespace KimoTech.LichoraHost
             NativeFrameHeight = height;
             _IpcInputWriter = ipcInputWriter;
             _IpcFrameReader = ipcFrameReader;
-            _OutputPump = new BrowserOutputPump(ipcOutputReader, rectTransform, width, height);
+            _OutputPump = new BrowserOutputPump(
+                ipcOutputReader,
+                rectTransform,
+                width,
+                height,
+                overlaySettings
+            );
             _ImeInputState = new ImeInputState(
                 PushImeComposition,
                 PushImeCommit,

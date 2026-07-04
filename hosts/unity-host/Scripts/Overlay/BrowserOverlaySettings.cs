@@ -24,14 +24,29 @@ namespace KimoTech.LichoraHost
             set => _PassMap = value ?? new PassMap();
         }
 
+        public void SetDynamicPassRects(PassRegion[] passRects)
+        {
+            PassMap.SetDynamicPassRects(passRects);
+        }
+
+        public void ClearDynamicPassRects()
+        {
+            PassMap.ClearDynamicPassRects();
+        }
+
         public bool ShouldPassThrough(Vector2 browserNormalizedPosition)
         {
-            if (_PointerHitMode != PointerHitMode.StaticPassRects)
+            switch (_PointerHitMode)
             {
-                return false;
+                case PointerHitMode.StaticPassRects:
+                    return _PassMap != null
+                        && _PassMap.ContainsStaticPassRect(browserNormalizedPosition);
+                case PointerHitMode.DomPassMap:
+                    return _PassMap != null
+                        && _PassMap.ContainsDynamicPassRect(browserNormalizedPosition);
+                default:
+                    return false;
             }
-
-            return _PassMap != null && _PassMap.ContainsStaticPassRect(browserNormalizedPosition);
         }
     }
 }

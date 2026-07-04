@@ -41,6 +41,7 @@ namespace KimoTech.LichoraHost
         private readonly object _SnapshotLock = new object();
         private readonly byte[] _OutputBuffer = new byte[OutputBufferSize];
         private readonly RectTransform _RectTransform;
+        private readonly BrowserOverlaySettings _OverlaySettings;
         private Canvas _Canvas;
         private int _Width;
         private int _Height;
@@ -55,9 +56,15 @@ namespace KimoTech.LichoraHost
         private int _Version;
         private bool _HasLoggedInvalidOutput;
 
-        public BrowserOutputState(RectTransform rectTransform, int width, int height)
+        public BrowserOutputState(
+            RectTransform rectTransform,
+            int width,
+            int height,
+            BrowserOverlaySettings overlaySettings
+        )
         {
             _RectTransform = rectTransform;
+            _OverlaySettings = overlaySettings;
             _Canvas = rectTransform != null ? rectTransform.GetComponentInParent<Canvas>() : null;
             _Width = width;
             _Height = height;
@@ -67,6 +74,7 @@ namespace KimoTech.LichoraHost
         {
             _Width = width;
             _Height = height;
+            ClearOverlayPassMap();
         }
 
         public void ReadLatest(BrowserIpcOutputReader outputReader)
@@ -156,6 +164,9 @@ namespace KimoTech.LichoraHost
                 case BrowserIpcOutputPayloadKind.ScriptResult:
                 case BrowserIpcOutputPayloadKind.PageEvent:
                     break;
+                case BrowserIpcOutputPayloadKind.OverlayPassMap:
+                    UpdateOverlayPassMap(payload.OverlayPassMap);
+                    break;
             }
         }
 
@@ -200,6 +211,103 @@ namespace KimoTech.LichoraHost
             }
         }
 
+        private void UpdateOverlayPassMap(BrowserOverlayPassMapPayload payload)
+        {
+            if (_OverlaySettings == null)
+            {
+                return;
+            }
+
+            if (!IsValidOverlayPassMapPayload(payload))
+            {
+                _OverlaySettings.ClearDynamicPassRects();
+                return;
+            }
+
+            var passRects = BuildDynamicPassRects(payload);
+            _OverlaySettings.SetDynamicPassRects(passRects);
+        }
+
+        public void ClearOverlayPassMap()
+        {
+            _OverlaySettings?.ClearDynamicPassRects();
+        }
+
+        private static PassRegion[] BuildDynamicPassRects(BrowserOverlayPassMapPayload payload)
+        {
+            var regions = payload.Regions ?? Array.Empty<BrowserOverlayPassRegionPayload>();
+            var passRects = new PassRegion[regions.Length];
+            var count = 0;
+
+            foreach (var region in regions)
+            {
+                if (!TryCreateDynamicPassRect(payload, region, out var passRect))
+                {
+                    continue;
+                }
+
+                passRects[count++] = passRect;
+            }
+
+            if (count == passRects.Length)
+            {
+                return passRects;
+            }
+
+            if (count == 0)
+            {
+                return Array.Empty<PassRegion>();
+            }
+
+            var compactPassRects = new PassRegion[count];
+            Array.Copy(passRects, compactPassRects, count);
+            return compactPassRects;
+        }
+
+        private static bool TryCreateDynamicPassRect(
+            BrowserOverlayPassMapPayload payload,
+            BrowserOverlayPassRegionPayload region,
+            out PassRegion passRect
+        )
+        {
+            passRect = default;
+
+            if (region.Disabled || region.Shape != 1)
+            {
+                return false;
+            }
+
+            if (
+                !IsFinite(region.X)
+                || !IsFinite(region.Y)
+                || !IsFinite(region.Width)
+                || !IsFinite(region.Height)
+                || region.Width <= 0f
+                || region.Height <= 0f
+            )
+            {
+                return false;
+            }
+
+            var normalizedRect = new Rect(
+                region.X / payload.ViewportWidth,
+                region.Y / payload.ViewportHeight,
+                region.Width / payload.ViewportWidth,
+                region.Height / payload.ViewportHeight
+            );
+            passRect = new PassRegion(normalizedRect);
+            return passRect.IsValid;
+        }
+
+        private static bool IsValidOverlayPassMapPayload(BrowserOverlayPassMapPayload payload)
+        {
+            return payload.Enabled
+                && payload.ViewportWidth > 0
+                && payload.ViewportHeight > 0
+                && IsFinite(payload.DeviceScaleFactor)
+                && payload.DeviceScaleFactor > 0f;
+        }
+
         private void UpdateImePosition(int browserX, int browserY, int browserHeight)
         {
             if (_RectTransform == null || _Width <= 0 || _Height <= 0)
@@ -234,6 +342,11 @@ namespace KimoTech.LichoraHost
                     Screen.height - worldPoint.y
                 );
             }
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
         private void LogInvalidOutput(string message)

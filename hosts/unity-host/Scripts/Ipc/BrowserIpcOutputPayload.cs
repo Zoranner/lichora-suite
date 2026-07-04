@@ -9,10 +9,70 @@ namespace KimoTech.LichoraHost
         SurroundingText = 2,
         ScriptResult = 3,
         PageEvent = 4,
+        OverlayPassMap = 5,
+    }
+
+    internal readonly struct BrowserOverlayPassRegionPayload
+    {
+        public BrowserOverlayPassRegionPayload(
+            uint id,
+            byte shape,
+            bool disabled,
+            float x,
+            float y,
+            float width,
+            float height
+        )
+        {
+            Id = id;
+            Shape = shape;
+            Disabled = disabled;
+            X = x;
+            Y = y;
+            Width = width;
+            Height = height;
+        }
+
+        public uint Id { get; }
+        public byte Shape { get; }
+        public bool Disabled { get; }
+        public float X { get; }
+        public float Y { get; }
+        public float Width { get; }
+        public float Height { get; }
+    }
+
+    internal readonly struct BrowserOverlayPassMapPayload
+    {
+        public BrowserOverlayPassMapPayload(
+            ulong version,
+            int viewportWidth,
+            int viewportHeight,
+            float deviceScaleFactor,
+            bool enabled,
+            BrowserOverlayPassRegionPayload[] regions
+        )
+        {
+            Version = version;
+            ViewportWidth = viewportWidth;
+            ViewportHeight = viewportHeight;
+            DeviceScaleFactor = deviceScaleFactor;
+            Enabled = enabled;
+            Regions = regions ?? Array.Empty<BrowserOverlayPassRegionPayload>();
+        }
+
+        public ulong Version { get; }
+        public int ViewportWidth { get; }
+        public int ViewportHeight { get; }
+        public float DeviceScaleFactor { get; }
+        public bool Enabled { get; }
+        public BrowserOverlayPassRegionPayload[] Regions { get; }
     }
 
     internal struct BrowserIpcOutputPayload
     {
+        private const int OverlayPassRegionPayloadSize = 24;
+
         public BrowserIpcOutputPayloadKind Kind { get; set; }
         public int CaretX { get; set; }
         public int CaretY { get; set; }
@@ -27,6 +87,7 @@ namespace KimoTech.LichoraHost
         public uint PageEventType { get; set; }
         public string Url { get; set; }
         public string Detail { get; set; }
+        public BrowserOverlayPassMapPayload OverlayPassMap { get; set; }
 
         public static bool TryDecode(
             byte[] buffer,
@@ -85,6 +146,9 @@ namespace KimoTech.LichoraHost
                         break;
                     case BrowserIpcOutputPayloadKind.PageEvent:
                         payload = DecodePageEvent(buffer, length, ref cursor);
+                        break;
+                    case BrowserIpcOutputPayloadKind.OverlayPassMap:
+                        payload = DecodeOverlayPassMap(buffer, length, ref cursor);
                         break;
                     default:
                         throw new ArgumentException($"unknown output payload kind: {(ushort)kind}");
@@ -172,6 +236,69 @@ namespace KimoTech.LichoraHost
             };
         }
 
+        private static BrowserIpcOutputPayload DecodeOverlayPassMap(
+            byte[] buffer,
+            int length,
+            ref int cursor
+        )
+        {
+            var version = ReadUInt64(buffer, length, ref cursor);
+            var viewportWidth = ReadInt32(buffer, length, ref cursor);
+            var viewportHeight = ReadInt32(buffer, length, ref cursor);
+            var deviceScaleFactor = ReadSingle(buffer, length, ref cursor);
+            var enabled = ReadByte(buffer, length, ref cursor) != 0;
+            Skip(buffer, length, ref cursor, 7);
+
+            var regionCount = ReadUInt32(buffer, length, ref cursor);
+            var remainingRegionCapacity = (length - cursor) / OverlayPassRegionPayloadSize;
+            if (regionCount > (uint)remainingRegionCapacity)
+            {
+                throw new ArgumentException(
+                    $"overlay pass map region count exceeds payload length: count={regionCount}, capacity={remainingRegionCapacity}"
+                );
+            }
+
+            var regions = new BrowserOverlayPassRegionPayload[checked((int)regionCount)];
+            for (var index = 0; index < regions.Length; index++)
+            {
+                regions[index] = DecodeOverlayPassRegion(buffer, length, ref cursor);
+            }
+
+            return new BrowserIpcOutputPayload
+            {
+                Kind = BrowserIpcOutputPayloadKind.OverlayPassMap,
+                OverlayPassMap = new BrowserOverlayPassMapPayload(
+                    version,
+                    viewportWidth,
+                    viewportHeight,
+                    deviceScaleFactor,
+                    enabled,
+                    regions
+                ),
+            };
+        }
+
+        private static BrowserOverlayPassRegionPayload DecodeOverlayPassRegion(
+            byte[] buffer,
+            int length,
+            ref int cursor
+        )
+        {
+            var id = ReadUInt32(buffer, length, ref cursor);
+            var shape = ReadByte(buffer, length, ref cursor);
+            var disabled = ReadByte(buffer, length, ref cursor) != 0;
+            Skip(buffer, length, ref cursor, 2);
+            return new BrowserOverlayPassRegionPayload(
+                id,
+                shape,
+                disabled,
+                ReadSingle(buffer, length, ref cursor),
+                ReadSingle(buffer, length, ref cursor),
+                ReadSingle(buffer, length, ref cursor),
+                ReadSingle(buffer, length, ref cursor)
+            );
+        }
+
         private static byte ReadByte(byte[] buffer, int length, ref int cursor)
         {
             RequireLength(length, cursor + 1);
@@ -182,6 +309,14 @@ namespace KimoTech.LichoraHost
         {
             RequireLength(length, cursor + 4);
             var value = BitConverter.ToInt32(buffer, cursor);
+            cursor += 4;
+            return value;
+        }
+
+        private static float ReadSingle(byte[] buffer, int length, ref int cursor)
+        {
+            RequireLength(length, cursor + 4);
+            var value = BitConverter.ToSingle(buffer, cursor);
             cursor += 4;
             return value;
         }

@@ -12,11 +12,12 @@ namespace KimoTech.LichoraHost
             BrowserIpcOutputReader outputReader,
             RectTransform rectTransform,
             int width,
-            int height
+            int height,
+            BrowserOverlaySettings overlaySettings
         )
         {
             _OutputReader = outputReader ?? throw new ArgumentNullException(nameof(outputReader));
-            _OutputState = new BrowserOutputState(rectTransform, width, height);
+            _OutputState = new BrowserOutputState(rectTransform, width, height, overlaySettings);
         }
 
         public ISurroundingTextSnapshotProvider SurroundingTextProvider => _OutputState;
@@ -34,6 +35,7 @@ namespace KimoTech.LichoraHost
 
         public void Dispose()
         {
+            _OutputState.ClearOverlayPassMap();
             _OutputReader.Dispose();
         }
     }

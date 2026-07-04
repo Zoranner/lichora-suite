@@ -144,6 +144,7 @@ namespace KimoTech.LichoraHost
                 Width,
                 Height,
                 RectTransform,
+                _OverlaySettings,
                 _Session.CreateIpcInputWriter(),
                 _Session.CreateIpcFrameReader(),
                 _Session.CreateIpcOutputReader()
