@@ -36,12 +36,8 @@ namespace KimoTech.LichoraHost
     public sealed class BrowserOutputState : ISurroundingTextSnapshotProvider
     {
         private const byte NormalContentType = 0;
-        private const int OutputBufferSize = 64 * 1024;
-
         private readonly object _SnapshotLock = new object();
-        private readonly byte[] _OutputBuffer = new byte[OutputBufferSize];
         private readonly RectTransform _RectTransform;
-        private readonly BrowserOverlaySettings _OverlaySettings;
         private Canvas _Canvas;
         private int _Width;
         private int _Height;
@@ -56,15 +52,9 @@ namespace KimoTech.LichoraHost
         private int _Version;
         private bool _HasLoggedInvalidOutput;
 
-        public BrowserOutputState(
-            RectTransform rectTransform,
-            int width,
-            int height,
-            BrowserOverlaySettings overlaySettings
-        )
+        public BrowserOutputState(RectTransform rectTransform, int width, int height)
         {
             _RectTransform = rectTransform;
-            _OverlaySettings = overlaySettings;
             _Canvas = rectTransform != null ? rectTransform.GetComponentInParent<Canvas>() : null;
             _Width = width;
             _Height = height;
@@ -74,41 +64,19 @@ namespace KimoTech.LichoraHost
         {
             _Width = width;
             _Height = height;
-            ClearOverlayPassMap();
         }
 
-        public void ReadLatest(BrowserIpcOutputReader outputReader)
+        internal void ApplyCaret(int x, int y, int height, bool visible)
         {
-            int written;
-            try
+            if (visible)
             {
-                written = outputReader.TryRead(_OutputBuffer);
+                UpdatePendingCaret(x, y, height);
             }
-            catch (Exception exception)
-            {
-                LogInvalidOutput($"read failed: {exception.Message}");
-                return;
-            }
+        }
 
-            if (written <= 0)
-            {
-                return;
-            }
-
-            if (
-                !BrowserIpcOutputPayload.TryDecode(
-                    _OutputBuffer,
-                    written,
-                    out var payload,
-                    out var error
-                )
-            )
-            {
-                LogInvalidOutput(error);
-                return;
-            }
-
-            Apply(payload);
+        internal void ApplySurroundingText(string text, int cursor, int anchor)
+        {
+            UpdateSurroundingText(text, cursor, anchor);
         }
 
         public bool TryGetSnapshot(out SurroundingTextSnapshot snapshot)
@@ -144,32 +112,6 @@ namespace KimoTech.LichoraHost
             UpdateImePosition(_PendingCaretX, _PendingCaretY, _PendingCaretHeight);
         }
 
-        private void Apply(BrowserIpcOutputPayload payload)
-        {
-            switch (payload.Kind)
-            {
-                case BrowserIpcOutputPayloadKind.Caret:
-                    if (payload.CaretVisible)
-                    {
-                        UpdatePendingCaret(payload.CaretX, payload.CaretY, payload.CaretHeight);
-                    }
-                    break;
-                case BrowserIpcOutputPayloadKind.SurroundingText:
-                    UpdateSurroundingText(
-                        payload.Text,
-                        payload.SelectionStart,
-                        payload.SelectionEnd
-                    );
-                    break;
-                case BrowserIpcOutputPayloadKind.ScriptResult:
-                case BrowserIpcOutputPayloadKind.PageEvent:
-                    break;
-                case BrowserIpcOutputPayloadKind.OverlayPassMap:
-                    UpdateOverlayPassMap(payload.OverlayPassMap);
-                    break;
-            }
-        }
-
         private void UpdatePendingCaret(int x, int y, int height)
         {
             if (_PendingCaretX == x && _PendingCaretY == y && _PendingCaretHeight == height)
@@ -181,131 +123,6 @@ namespace KimoTech.LichoraHost
             _PendingCaretY = y;
             _PendingCaretHeight = height;
             Interlocked.Increment(ref _PendingCaretVersion);
-        }
-
-        private void UpdateSurroundingText(string text, int cursor, int anchor)
-        {
-            if (text == null)
-            {
-                text = "";
-            }
-            if (cursor < 0 || anchor < 0 || cursor > text.Length || anchor > text.Length)
-            {
-                LogInvalidOutput(
-                    $"invalid surrounding text cursor={cursor}, anchor={anchor}, textLength={text.Length}"
-                );
-                return;
-            }
-
-            lock (_SnapshotLock)
-            {
-                if (_Text == text && _Cursor == cursor && _Anchor == anchor)
-                {
-                    return;
-                }
-
-                _Text = text;
-                _Cursor = cursor;
-                _Anchor = anchor;
-                Interlocked.Increment(ref _Version);
-            }
-        }
-
-        private void UpdateOverlayPassMap(BrowserOverlayPassMapPayload payload)
-        {
-            if (_OverlaySettings == null)
-            {
-                return;
-            }
-
-            if (!IsValidOverlayPassMapPayload(payload))
-            {
-                _OverlaySettings.ClearDynamicPassRects();
-                return;
-            }
-
-            var passRects = BuildDynamicPassRects(payload);
-            _OverlaySettings.SetDynamicPassRects(passRects);
-        }
-
-        public void ClearOverlayPassMap()
-        {
-            _OverlaySettings?.ClearDynamicPassRects();
-        }
-
-        private static PassRegion[] BuildDynamicPassRects(BrowserOverlayPassMapPayload payload)
-        {
-            var regions = payload.Regions ?? Array.Empty<BrowserOverlayPassRegionPayload>();
-            var passRects = new PassRegion[regions.Length];
-            var count = 0;
-
-            foreach (var region in regions)
-            {
-                if (!TryCreateDynamicPassRect(payload, region, out var passRect))
-                {
-                    continue;
-                }
-
-                passRects[count++] = passRect;
-            }
-
-            if (count == passRects.Length)
-            {
-                return passRects;
-            }
-
-            if (count == 0)
-            {
-                return Array.Empty<PassRegion>();
-            }
-
-            var compactPassRects = new PassRegion[count];
-            Array.Copy(passRects, compactPassRects, count);
-            return compactPassRects;
-        }
-
-        private static bool TryCreateDynamicPassRect(
-            BrowserOverlayPassMapPayload payload,
-            BrowserOverlayPassRegionPayload region,
-            out PassRegion passRect
-        )
-        {
-            passRect = default;
-
-            if (region.Disabled || region.Shape != 1)
-            {
-                return false;
-            }
-
-            if (
-                !IsFinite(region.X)
-                || !IsFinite(region.Y)
-                || !IsFinite(region.Width)
-                || !IsFinite(region.Height)
-                || region.Width <= 0f
-                || region.Height <= 0f
-            )
-            {
-                return false;
-            }
-
-            var normalizedRect = new Rect(
-                region.X / payload.ViewportWidth,
-                region.Y / payload.ViewportHeight,
-                region.Width / payload.ViewportWidth,
-                region.Height / payload.ViewportHeight
-            );
-            passRect = new PassRegion(normalizedRect);
-            return passRect.IsValid;
-        }
-
-        private static bool IsValidOverlayPassMapPayload(BrowserOverlayPassMapPayload payload)
-        {
-            return payload.Enabled
-                && payload.ViewportWidth > 0
-                && payload.ViewportHeight > 0
-                && IsFinite(payload.DeviceScaleFactor)
-                && payload.DeviceScaleFactor > 0f;
         }
 
         private void UpdateImePosition(int browserX, int browserY, int browserHeight)
@@ -344,11 +161,6 @@ namespace KimoTech.LichoraHost
             }
         }
 
-        private static bool IsFinite(float value)
-        {
-            return !float.IsNaN(value) && !float.IsInfinity(value);
-        }
-
         private void LogInvalidOutput(string message)
         {
             if (_HasLoggedInvalidOutput)
@@ -358,6 +170,34 @@ namespace KimoTech.LichoraHost
 
             _HasLoggedInvalidOutput = true;
             Debug.LogWarning($"Browser IPC output ignored: {message}");
+        }
+
+        private void UpdateSurroundingText(string text, int cursor, int anchor)
+        {
+            if (text == null)
+            {
+                text = "";
+            }
+            if (cursor < 0 || anchor < 0 || cursor > text.Length || anchor > text.Length)
+            {
+                LogInvalidOutput(
+                    $"invalid surrounding text cursor={cursor}, anchor={anchor}, textLength={text.Length}"
+                );
+                return;
+            }
+
+            lock (_SnapshotLock)
+            {
+                if (_Text == text && _Cursor == cursor && _Anchor == anchor)
+                {
+                    return;
+                }
+
+                _Text = text;
+                _Cursor = cursor;
+                _Anchor = anchor;
+                Interlocked.Increment(ref _Version);
+            }
         }
     }
 }
