@@ -1,8 +1,8 @@
 use ipc::{
     CaretOutput, ImeCompositionInput, InputPayload, InputPayloadDecodeError, InputPayloadKind,
     KeyboardKeyInput, MouseButtonInput, MouseLatest, MouseWheelInput, OutputPayload,
-    OutputPayloadKind, PageEventOutput, ScriptRequestInput, ScriptResultOutput,
-    SurroundingTextOutput,
+    OutputPayloadDecodeError, OutputPayloadKind, OverlayPassMapOutput, OverlayPassRegionOutput,
+    PageEventOutput, ScriptRequestInput, ScriptResultOutput, SurroundingTextOutput,
 };
 
 fn input_header(kind: InputPayloadKind) -> Vec<u8> {
@@ -219,4 +219,85 @@ fn output_payload_roundtrips_surrounding_text_and_script_result() {
     for payload in payloads {
         assert_eq!(OutputPayload::decode(&payload.encode()).unwrap(), payload);
     }
+}
+
+#[test]
+fn output_payload_encodes_overlay_pass_map_as_golden_bytes() {
+    assert_eq!(OutputPayloadKind::OverlayPassMap as u16, 5);
+
+    let payload = OutputPayload::OverlayPassMap(OverlayPassMapOutput {
+        version: 7,
+        viewport_width: 1280,
+        viewport_height: 720,
+        device_scale_factor: 1.5,
+        enabled: true,
+        regions: vec![
+            OverlayPassRegionOutput {
+                id: 10,
+                shape: 1,
+                disabled: false,
+                x: 12.5,
+                y: 24.25,
+                width: 300.0,
+                height: 120.5,
+            },
+            OverlayPassRegionOutput {
+                id: 11,
+                shape: 1,
+                disabled: true,
+                x: -1.0,
+                y: 0.0,
+                width: 640.0,
+                height: 480.0,
+            },
+        ],
+    });
+
+    let mut expected = output_header(OutputPayloadKind::OverlayPassMap);
+    expected.extend_from_slice(&7u64.to_le_bytes());
+    expected.extend_from_slice(&1280i32.to_le_bytes());
+    expected.extend_from_slice(&720i32.to_le_bytes());
+    expected.extend_from_slice(&1.5f32.to_le_bytes());
+    expected.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0]);
+    expected.extend_from_slice(&2u32.to_le_bytes());
+    expected.extend_from_slice(&10u32.to_le_bytes());
+    expected.extend_from_slice(&[1, 0]);
+    expected.extend_from_slice(&0u16.to_le_bytes());
+    expected.extend_from_slice(&12.5f32.to_le_bytes());
+    expected.extend_from_slice(&24.25f32.to_le_bytes());
+    expected.extend_from_slice(&300.0f32.to_le_bytes());
+    expected.extend_from_slice(&120.5f32.to_le_bytes());
+    expected.extend_from_slice(&11u32.to_le_bytes());
+    expected.extend_from_slice(&[1, 1]);
+    expected.extend_from_slice(&0u16.to_le_bytes());
+    expected.extend_from_slice(&(-1.0f32).to_le_bytes());
+    expected.extend_from_slice(&0.0f32.to_le_bytes());
+    expected.extend_from_slice(&640.0f32.to_le_bytes());
+    expected.extend_from_slice(&480.0f32.to_le_bytes());
+
+    assert_eq!(payload.encode(), expected);
+    assert_eq!(OutputPayload::decode(&expected).unwrap(), payload);
+}
+
+#[test]
+fn output_payload_rejects_overlay_pass_map_trailing_bytes() {
+    let mut encoded = OutputPayload::OverlayPassMap(OverlayPassMapOutput {
+        version: 1,
+        viewport_width: 800,
+        viewport_height: 600,
+        device_scale_factor: 1.0,
+        enabled: false,
+        regions: Vec::new(),
+    })
+    .encode();
+    let expected_end = encoded.len();
+    encoded.push(0);
+
+    assert_eq!(
+        OutputPayload::decode(&encoded).unwrap_err(),
+        OutputPayloadDecodeError::TrailingGarbage {
+            expected_end,
+            actual: expected_end + 1
+        }
+    );
 }

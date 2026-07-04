@@ -28,6 +28,7 @@ pub enum OutputPayloadKind {
     SurroundingText = 2,
     ScriptResult = 3,
     PageEvent = 4,
+    OverlayPassMap = 5,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -114,12 +115,34 @@ pub struct PageEventOutput {
     pub detail: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct OverlayPassRegionOutput {
+    pub id: u32,
+    pub shape: u8,
+    pub disabled: bool,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OverlayPassMapOutput {
+    pub version: u64,
+    pub viewport_width: i32,
+    pub viewport_height: i32,
+    pub device_scale_factor: f32,
+    pub enabled: bool,
+    pub regions: Vec<OverlayPassRegionOutput>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum OutputPayload {
     Caret(CaretOutput),
     SurroundingText(SurroundingTextOutput),
     ScriptResult(ScriptResultOutput),
     PageEvent(PageEventOutput),
+    OverlayPassMap(OverlayPassMapOutput),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -350,6 +373,7 @@ impl OutputPayload {
             Self::SurroundingText(_) => OutputPayloadKind::SurroundingText,
             Self::ScriptResult(_) => OutputPayloadKind::ScriptResult,
             Self::PageEvent(_) => OutputPayloadKind::PageEvent,
+            Self::OverlayPassMap(_) => OutputPayloadKind::OverlayPassMap,
         }
     }
 
@@ -380,6 +404,18 @@ impl OutputPayload {
                 write_u32(&mut buffer, output.event_type);
                 write_string(&mut buffer, &output.url);
                 write_string(&mut buffer, &output.detail);
+            }
+            Self::OverlayPassMap(output) => {
+                write_u64(&mut buffer, output.version);
+                write_i32(&mut buffer, output.viewport_width);
+                write_i32(&mut buffer, output.viewport_height);
+                write_f32(&mut buffer, output.device_scale_factor);
+                buffer.push(u8::from(output.enabled));
+                buffer.extend_from_slice(&[0; 7]);
+                write_u32(&mut buffer, output.regions.len() as u32);
+                for region in &output.regions {
+                    write_overlay_pass_region(&mut buffer, region);
+                }
             }
         }
         buffer
@@ -419,6 +455,27 @@ impl OutputPayload {
                     event_type: read_output_u32(buffer, &mut cursor)?,
                     url: read_output_string(buffer, &mut cursor, "url")?,
                     detail: read_output_string(buffer, &mut cursor, "detail")?,
+                })
+            }
+            kind if kind == OutputPayloadKind::OverlayPassMap as u16 => {
+                let version = read_output_u64(buffer, &mut cursor)?;
+                let viewport_width = read_output_i32(buffer, &mut cursor)?;
+                let viewport_height = read_output_i32(buffer, &mut cursor)?;
+                let device_scale_factor = read_output_f32(buffer, &mut cursor)?;
+                let enabled = read_output_u8(buffer, &mut cursor)? != 0;
+                skip_output_padding(buffer, &mut cursor, 7)?;
+                let region_count = read_output_u32(buffer, &mut cursor)?;
+                let mut regions = Vec::with_capacity(region_count as usize);
+                for _ in 0..region_count {
+                    regions.push(read_output_overlay_pass_region(buffer, &mut cursor)?);
+                }
+                Self::OverlayPassMap(OverlayPassMapOutput {
+                    version,
+                    viewport_width,
+                    viewport_height,
+                    device_scale_factor,
+                    enabled,
+                    regions,
                 })
             }
             unknown => return Err(OutputPayloadDecodeError::UnknownKind(unknown)),
@@ -504,8 +561,23 @@ fn write_i32(buffer: &mut Vec<u8>, value: i32) {
     buffer.extend_from_slice(&value.to_le_bytes());
 }
 
+fn write_f32(buffer: &mut Vec<u8>, value: f32) {
+    buffer.extend_from_slice(&value.to_le_bytes());
+}
+
 fn write_u64(buffer: &mut Vec<u8>, value: u64) {
     buffer.extend_from_slice(&value.to_le_bytes());
+}
+
+fn write_overlay_pass_region(buffer: &mut Vec<u8>, region: &OverlayPassRegionOutput) {
+    write_u32(buffer, region.id);
+    buffer.push(region.shape);
+    buffer.push(u8::from(region.disabled));
+    write_u16(buffer, 0);
+    write_f32(buffer, region.x);
+    write_f32(buffer, region.y);
+    write_f32(buffer, region.width);
+    write_f32(buffer, region.height);
 }
 
 fn read_input_header(buffer: &[u8]) -> Result<u16, InputPayloadDecodeError> {
@@ -624,6 +696,12 @@ fn read_output_i32(buffer: &[u8], cursor: &mut usize) -> Result<i32, OutputPaylo
     Ok(value)
 }
 
+fn read_output_f32(buffer: &[u8], cursor: &mut usize) -> Result<f32, OutputPayloadDecodeError> {
+    let value = f32::from_le_bytes(read_output_array::<4>(buffer, *cursor)?);
+    *cursor += 4;
+    Ok(value)
+}
+
 fn read_output_u32(buffer: &[u8], cursor: &mut usize) -> Result<u32, OutputPayloadDecodeError> {
     let value = u32::from_le_bytes(read_output_array::<4>(buffer, *cursor)?);
     *cursor += 4;
@@ -641,6 +719,25 @@ fn read_output_u8(buffer: &[u8], cursor: &mut usize) -> Result<u8, OutputPayload
     let value = buffer[*cursor];
     *cursor += 1;
     Ok(value)
+}
+
+fn read_output_overlay_pass_region(
+    buffer: &[u8],
+    cursor: &mut usize,
+) -> Result<OverlayPassRegionOutput, OutputPayloadDecodeError> {
+    let id = read_output_u32(buffer, cursor)?;
+    let shape = read_output_u8(buffer, cursor)?;
+    let disabled = read_output_u8(buffer, cursor)? != 0;
+    skip_output_padding(buffer, cursor, 2)?;
+    Ok(OverlayPassRegionOutput {
+        id,
+        shape,
+        disabled,
+        x: read_output_f32(buffer, cursor)?,
+        y: read_output_f32(buffer, cursor)?,
+        width: read_output_f32(buffer, cursor)?,
+        height: read_output_f32(buffer, cursor)?,
+    })
 }
 
 fn skip_padding(

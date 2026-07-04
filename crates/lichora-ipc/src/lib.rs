@@ -24,8 +24,8 @@ pub use status::{
 pub use typed_payload::{
     CaretOutput, ImeCompositionInput, InputPayload, InputPayloadDecodeError, InputPayloadKind,
     KeyboardKeyInput, MouseButtonInput, MouseWheelInput, OutputPayload, OutputPayloadDecodeError,
-    OutputPayloadKind, PageEventOutput, ScriptRequestInput, ScriptResultOutput,
-    SurroundingTextOutput,
+    OutputPayloadKind, OverlayPassMapOutput, OverlayPassRegionOutput, PageEventOutput,
+    ScriptRequestInput, ScriptResultOutput, SurroundingTextOutput,
 };
 
 pub const CHANNEL_MAGIC: u32 = 0x3249_4245;
