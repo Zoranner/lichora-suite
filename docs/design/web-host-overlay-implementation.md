@@ -174,7 +174,7 @@ PassRegion
 
 ## IPC 扩展
 
-当前 IPC typed output 已经包含 `OverlayPassMap`，用于让宿主消费结构化 pass map。Web SDK 和 Rust bridge 尚未完成，因此当前还不能把网页声明自动推送为该 typed payload。
+当前 IPC typed output 已经包含 `OverlayPassMap`，用于让宿主消费结构化 pass map。Web SDK 和临时 Rust console bridge 已能把网页声明转换为 typed `OverlayPassMap`；正式 CEF message route 或 process message bridge 仍未落地。
 
 Rust `crates/lichora-ipc/src/typed_payload.rs` 当前定义：
 
@@ -217,7 +217,7 @@ Unity host 当前已通过 `BrowserIpcOutputPayload` 解码该结构，并由 `B
 
 ## Web SDK 和 Bridge
 
-网页端 SDK 在 IPC 和 Unity 本地链路稳定后实现，目录为：
+网页端 SDK 已作为独立包落地，目录为：
 
 ```text
 packages/overlay/
@@ -240,7 +240,7 @@ Node 相关命令必须使用 bun。
 - 限制 region 数量和 payload 大小。
 - 通过 bridge 发送 pass map。
 
-SDK 不负责 UI 框架适配，不管理业务弹窗状态，不处理宿主场景逻辑。普通 DOM 覆盖物遮挡可以作为第二轮能力，不进入第一版核心链路。
+SDK 不负责 UI 框架适配，不管理业务弹窗状态，不处理宿主场景逻辑。当前第一版会过滤禁用、隐藏、不可见和空尺寸元素；普通 DOM 覆盖物遮挡仍作为第二轮能力，不进入第一版核心链路。
 
 bridge 路线：
 
@@ -250,7 +250,7 @@ bridge 路线：
 
 ## Rust 模块边界
 
-新增 Rust 模块：
+Rust 模块：
 
 ```text
 src/modules/overlay.rs
@@ -258,10 +258,10 @@ src/modules/overlay.rs
 
 职责：
 
-- 接收网页 bridge 消息。
+- 接收网页 bridge 消息。当前实现为临时 console prefix bridge。
 - 校验版本、大小、region 数量和坐标范围。
 - 转换为 typed `OverlayPassMap`。
-- publish 到 output latest。
+- 在 CEF console handler 中 publish 为 typed `OverlayPassMap` output。
 - 记录 parse error、dropped、version、region count 等计数。
 
 不承担：
@@ -328,7 +328,7 @@ src/modules/overlay.rs
 
 目标：让宿主能消费结构化 overlay pass map。
 
-当前进度：Rust IPC typed payload 和 Unity host typed payload 消费已落地；网页端 SDK 与 Rust bridge 尚未落地，仍在下一阶段。
+当前进度：Rust IPC typed payload、Unity host typed payload 消费、网页端 SDK 与临时 Rust console bridge 已落地；正式 CEF message route 或 process message bridge 仍在后续阶段。
 
 交付：
 
@@ -354,13 +354,13 @@ src/modules/overlay.rs
 - `packages/overlay` bun package。
 - Rust `src/modules/overlay.rs`。
 - bridge 到 typed output 的转换。
-- 示例受控页面。
 
 验证：
 
 - bun test 或等价 bun 命令。
 - Rust 编码和解析测试。
 - Unity 用户实测 DOM pass 区域穿透。
+- 后续补示例受控页面和正式 CEF bridge 验证。
 
 ### BrowserAlpha
 

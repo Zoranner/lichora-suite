@@ -65,4 +65,4 @@ header 后的 payload 字段如下：
 
 当 pass map 禁用、非法、viewport 与当前页面尺寸不匹配，或宿主侧认为 pass map 已过期时，默认由浏览器接收输入，避免页面 UI 因过期穿透状态失控。
 
-当前 Rust IPC core 已实现 `OverlayPassMap` typed output 编解码和 golden test。Unity host 已解码并消费该 typed payload，将有效矩形转换为动态 pass rect。Web SDK 和从网页 bridge 到 Rust typed output 的链路仍属于后续阶段，不能视为当前已完成能力。
+当前 Rust IPC core 已实现 `OverlayPassMap` typed output 编解码和 golden test。Unity host 已解码并消费该 typed payload，将有效矩形转换为动态 pass rect。Web SDK 已能生成 pass map，并通过临时 console bridge 交给 Rust 转换为 typed `OverlayPassMap`。正式 CEF message route 或 process message bridge、Unity 内 DOM pass 区域实测仍属于后续验收项。

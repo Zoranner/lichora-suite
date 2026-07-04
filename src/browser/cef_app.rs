@@ -6,7 +6,10 @@
 mod cef_impl {
     use crate::browser::output::BrowserOutputIpcChannels;
     use crate::browser::render::OsrRenderHandler;
-    use crate::modules::{parse_caret_console_payload, SurroundingTextPayload};
+    use crate::modules::{
+        parse_caret_console_payload, parse_overlay_pass_map_console_payload,
+        SurroundingTextPayload, OVERLAY_PASS_MAP_CONSOLE_PREFIX,
+    };
     use cef::*;
     use log::info;
     use std::cell::RefCell;
@@ -324,6 +327,15 @@ mod cef_impl {
                                     selection_end: snapshot.anchor_byte_offset as i32,
                                 },
                             ));
+                        }
+                    }
+                    return true as _;
+                }
+
+                if let Some(payload) = message.strip_prefix(OVERLAY_PASS_MAP_CONSOLE_PREFIX) {
+                    if let Ok(pass_map) = parse_overlay_pass_map_console_payload(payload) {
+                        if let Ok(mut output) = self.handler.output_ipc.lock() {
+                            let _ = output.publish(ipc::OutputPayload::OverlayPassMap(pass_map));
                         }
                     }
                     return true as _;
