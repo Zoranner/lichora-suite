@@ -19,12 +19,12 @@ namespace KimoTech.LichoraHost
             RectTransform rectTransform,
             int width,
             int height,
-            BrowserOverlaySettings overlaySettings
+            InputOwnershipSettings ownershipSettings
         )
         {
             _OutputReader = outputReader ?? throw new ArgumentNullException(nameof(outputReader));
             _OutputState = new BrowserOutputState(rectTransform, width, height);
-            _OverlayPassMapStore = new LegacyOverlayPassMapStore(overlaySettings);
+            _OverlayPassMapStore = new LegacyOverlayPassMapStore(ownershipSettings);
         }
 
         public ISurroundingTextSnapshotProvider SurroundingTextProvider => _OutputState;

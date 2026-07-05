@@ -28,9 +28,9 @@ namespace KimoTech.LichoraHost
         public bool FilteredColor = false;
 
         [SerializeField]
-        private BrowserOverlaySettings _OverlaySettings = new BrowserOverlaySettings();
+        private InputOwnershipSettings _InputOwnershipSettings = new InputOwnershipSettings();
 
-        public BrowserOverlaySettings OverlaySettings => _OverlaySettings;
+        public InputOwnershipSettings InputOwnershipSettings => _InputOwnershipSettings;
 
         // BrowserRender.shader 按 Unity UI 管线适配，统一处理 Y 轴翻转和背景色剔除。
         private void Awake()
@@ -42,7 +42,7 @@ namespace KimoTech.LichoraHost
                 _InputController = gameObject.AddComponent<BrowserInputController>();
             }
 
-            _InputController.OwnershipResolver = new LegacyPassOwnershipResolver(_OverlaySettings);
+            InitializeInputOwnership();
 
             var width = (int)RectTransform.rect.width;
             var height = (int)RectTransform.rect.height;
@@ -144,11 +144,22 @@ namespace KimoTech.LichoraHost
                 Width,
                 Height,
                 RectTransform,
-                _OverlaySettings,
+                _InputOwnershipSettings,
                 _Session.CreateIpcInputWriter(),
                 _Session.CreateIpcFrameReader(),
                 _Session.CreateIpcOutputReader()
             );
+        }
+
+        private void InitializeInputOwnership()
+        {
+            if (_InputOwnershipSettings == null)
+            {
+                _InputOwnershipSettings = new InputOwnershipSettings();
+            }
+
+            _InputOwnershipSettings.OwnershipMap.DefaultOwner = InputOwner.Web;
+            _InputController.OwnershipResolver = _InputOwnershipSettings;
         }
 
         private void BindFocusControllerToHandler()

@@ -5,18 +5,18 @@ namespace KimoTech.LichoraHost
 {
     internal sealed class LegacyOverlayPassMapStore
     {
-        private readonly BrowserOverlaySettings _OverlaySettings;
+        private readonly InputOwnershipSettings _OwnershipSettings;
         private ulong _LastLoggedVersion;
-        private int _LastLoggedDynamicRectCount = -1;
+        private int _LastLoggedDynamicRegionCount = -1;
 
-        public LegacyOverlayPassMapStore(BrowserOverlaySettings overlaySettings)
+        public LegacyOverlayPassMapStore(InputOwnershipSettings ownershipSettings)
         {
-            _OverlaySettings = overlaySettings;
+            _OwnershipSettings = ownershipSettings;
         }
 
         public void Apply(BrowserOverlayPassMapPayload payload)
         {
-            if (_OverlaySettings == null)
+            if (_OwnershipSettings == null)
             {
                 return;
             }
@@ -30,76 +30,96 @@ namespace KimoTech.LichoraHost
                 return;
             }
 
-            var dynamicPassRects = BuildDynamicPassRects(payload);
-            _OverlaySettings.SetDynamicPassRects(dynamicPassRects);
-            LogApplied(payload, dynamicPassRects.Length);
+            var dynamicRegions = BuildDynamicRegions(payload);
+            ApplyOwnershipMap(payload, dynamicRegions);
+            LogApplied(payload, dynamicRegions.Length);
         }
 
         public void Clear()
         {
-            var dynamicRectCount = _OverlaySettings?.PassMap?.DynamicPassRectCount ?? 0;
-            _OverlaySettings?.ClearDynamicPassRects();
-            if (dynamicRectCount > 0)
+            var dynamicRegionCount = _OwnershipSettings?.OwnershipMap?.DynamicRegionCount ?? 0;
+            _OwnershipSettings?.ClearDynamicRegions();
+            if (dynamicRegionCount > 0)
             {
                 Debug.Log("[LegacyOverlayPassMapStore] Cleared overlay pass map.");
             }
         }
 
-        private void LogApplied(BrowserOverlayPassMapPayload payload, int dynamicRectCount)
+        private void ApplyOwnershipMap(
+            BrowserOverlayPassMapPayload payload,
+            InputRegion[] dynamicRegions
+        )
+        {
+            if (_OwnershipSettings == null)
+            {
+                return;
+            }
+
+            var ownershipMap = _OwnershipSettings.OwnershipMap;
+            ownershipMap.Version = payload.Version;
+            ownershipMap.Enabled = payload.Enabled;
+            ownershipMap.ViewportWidth = payload.ViewportWidth;
+            ownershipMap.ViewportHeight = payload.ViewportHeight;
+            ownershipMap.DeviceScaleFactor = payload.DeviceScaleFactor;
+            ownershipMap.DefaultOwner = InputOwner.Web;
+            _OwnershipSettings.SetDynamicRegions(dynamicRegions);
+        }
+
+        private void LogApplied(BrowserOverlayPassMapPayload payload, int dynamicRegionCount)
         {
             if (
                 payload.Version == _LastLoggedVersion
-                && dynamicRectCount == _LastLoggedDynamicRectCount
+                && dynamicRegionCount == _LastLoggedDynamicRegionCount
             )
             {
                 return;
             }
 
             _LastLoggedVersion = payload.Version;
-            _LastLoggedDynamicRectCount = dynamicRectCount;
+            _LastLoggedDynamicRegionCount = dynamicRegionCount;
             Debug.Log(
-                $"[LegacyOverlayPassMapStore] Applied overlay pass map. version={payload.Version}, regions={payload.Regions.Length}, dynamicRects={dynamicRectCount}, viewport={payload.ViewportWidth}x{payload.ViewportHeight}"
+                $"[LegacyOverlayPassMapStore] Applied overlay pass map. version={payload.Version}, regions={payload.Regions.Length}, ownershipRegions={dynamicRegionCount}, viewport={payload.ViewportWidth}x{payload.ViewportHeight}"
             );
         }
 
-        private static PassRegion[] BuildDynamicPassRects(BrowserOverlayPassMapPayload payload)
+        private static InputRegion[] BuildDynamicRegions(BrowserOverlayPassMapPayload payload)
         {
             var regions = payload.Regions ?? Array.Empty<BrowserOverlayPassRegionPayload>();
-            var passRects = new PassRegion[regions.Length];
+            var inputRegions = new InputRegion[regions.Length];
             var count = 0;
 
             foreach (var region in regions)
             {
-                if (!TryCreateDynamicPassRect(payload, region, out var passRect))
+                if (!TryCreateDynamicRegion(payload, region, out var inputRegion))
                 {
                     continue;
                 }
 
-                passRects[count++] = passRect;
+                inputRegions[count++] = inputRegion;
             }
 
-            if (count == passRects.Length)
+            if (count == inputRegions.Length)
             {
-                return passRects;
+                return inputRegions;
             }
 
             if (count == 0)
             {
-                return Array.Empty<PassRegion>();
+                return Array.Empty<InputRegion>();
             }
 
-            var compactPassRects = new PassRegion[count];
-            Array.Copy(passRects, compactPassRects, count);
-            return compactPassRects;
+            var compactRegions = new InputRegion[count];
+            Array.Copy(inputRegions, compactRegions, count);
+            return compactRegions;
         }
 
-        private static bool TryCreateDynamicPassRect(
+        private static bool TryCreateDynamicRegion(
             BrowserOverlayPassMapPayload payload,
             BrowserOverlayPassRegionPayload region,
-            out PassRegion passRect
+            out InputRegion inputRegion
         )
         {
-            passRect = default;
+            inputRegion = default;
 
             if (region.Disabled || region.Shape != 1)
             {
@@ -124,8 +144,8 @@ namespace KimoTech.LichoraHost
                 region.Width / payload.ViewportWidth,
                 region.Height / payload.ViewportHeight
             );
-            passRect = new PassRegion(normalizedRect);
-            return passRect.IsValid;
+            inputRegion = new InputRegion(region.Id, InputOwner.Host, normalizedRect);
+            return inputRegion.IsValid;
         }
 
         private static bool IsValidPayload(BrowserOverlayPassMapPayload payload)

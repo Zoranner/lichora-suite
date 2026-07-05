@@ -7,11 +7,12 @@
 当前代码已经完成一轮重要重构：
 
 - Unity host 已拆出 `BrowserSurface`、`BrowserFramePump`、`BrowserPageSession`、`BrowserOutputPump`、`BrowserInputController`、`BrowserFocusController` 和 `BrowserCoordinateMapper`。
-- Unity host 已有 `StaticPassRects`、`DomPassMap`、`PassHitFilter`、`BrowserOverlayPassMapStore`，能够把 `OverlayPassMap` 转成动态 pass rect。
+- Unity host 已建立 `InputOwnershipMap`、`InputRegion`、`InputOwnershipSettings`、`BrowserInputRouter` 和 `BrowserPointerCapture`，运行时输入查询已经以 ownership 为唯一主模型。
+- Unity host 旧 `Overlay/` pass 运行时类型已删除；当前仅在 IPC 兼容边界保留 `OverlayPassMap` 名称，并在 `Ownership/Legacy/LegacyOverlayPassMapStore` 中一次性转成动态 `InputRegion`。
 - Rust IPC 已有 `OutputPayloadKind::OverlayPassMap` typed payload。
 - `packages/overlay` 已能生成 pass map，并通过临时 console bridge 交给 Rust 转换为 typed `OverlayPassMap`。
 
-这些能力证明了输入链路、IPC output、Web SDK 和 Unity raycast 协作是可行的。下一阶段不应继续在 `PassMap` 上叠加默认归属、圆角和覆盖规则，而应把实现主模型迁移为 `InputOwnershipMap`，并把 `OverlayPassMap` 保留为兼容层。
+这些能力证明了输入链路、IPC output、Web SDK 和 Unity raycast 协作是可行的。后续不应恢复 `PassMap` 或 `Overlay/` 目录，也不应在兼容 payload 上继续叠加默认归属、圆角和覆盖规则；新能力应进入 `InputOwnershipMap` 和后续正式 ownership payload。
 
 ## 设计原则
 
@@ -24,6 +25,7 @@
 - 不要求向后兼容旧 C# 公开字段；但旧网页标记和旧 SDK API 需要保留兼容映射。
 - legacy adapter 只能位于边界层。核心输入路由、命中判断和新 SDK API 不引用 `PassMap`、`PassRegion` 或 `OverlayPassMap` 命名。
 - 旧格式只允许在入口转换一次。转换完成后，内部流转、查询、测试和新协议都使用 ownership 模型，不能在核心链路里反复判断“是否 pass”。
+- Unity host 不再保留旧 pass 动态状态副本；旧 payload 到达后直接写入 `InputOwnershipSettings` 的动态 regions。
 
 ## 目标模型
 
@@ -119,10 +121,7 @@ hosts/unity-host/Scripts/
     InputRegion.cs
     InputOwnershipMap.cs
     InputOwnershipSettings.cs
-    InputOwnershipStore.cs
-    OwnershipHitFilter.cs
     Legacy/
-      LegacyPassMapAdapter.cs
       LegacyOverlayPassMapStore.cs
   Ipc/
     BrowserIpcOutputPayload.cs
@@ -141,7 +140,7 @@ hosts/unity-host/Scripts/
 
 - `Input/` 只依赖 `Ownership/` 的公开查询接口，不了解 pass map 兼容格式。
 - `Ownership/` 承担本地 map、region、圆角命中和过期策略。
-- `Ownership/Legacy/` 是唯一允许引用 `PassMap`、`PassRegion` 和 `OverlayPassMap` 的 Unity 目录。
+- `Ownership/Legacy/` 是唯一允许引用旧 IPC `OverlayPassMap` payload 的 Unity 目录。旧 C# `PassMap`、`PassRegion`、`PassHitFilter` 和 `BrowserOverlaySettings` 不再作为运行时类型存在。
 - `Ipc/` 只负责 typed payload decode，不做 Unity raycast 判断。
 - `Rendering/` 只处理帧和材质，不参与输入归属。
 - `Runtime/` 只处理页面生命周期和 IPC 句柄，不承载命中规则。
@@ -150,14 +149,14 @@ hosts/unity-host/Scripts/
 
 | 当前类型 | 下一阶段目标 | 职责 |
 | --- | --- | --- |
-| `PassMap` | `InputOwnershipMap` | 保存 default owner、regions、viewport 和版本 |
-| `PassRegion` | `InputRegion` | 表达 Rect 或 RoundedRect 区域及 owner |
-| `PassHitFilter` | `OwnershipHitFilter` | 在 Host 区域让 Unity raycast 继续命中底层对象 |
-| `BrowserOverlayPassMapStore` | `BrowserInputOwnershipStore` | 消费 IPC ownership payload，并维护当前有效 map |
-| `PointerHitMode.StaticPassRects` | `PointerHitMode.StaticOwnershipRegions` | 本地静态 ownership 配置 |
-| `PointerHitMode.DomPassMap` | `PointerHitMode.DomOwnershipMap` | 使用 Web SDK 推送的 ownership map |
+| `PassMap` | `InputOwnershipMap` | 已替换；保存 default owner、regions、viewport 和版本 |
+| `PassRegion` | `InputRegion` | 已替换；表达 Rect 或 RoundedRect 区域及 owner |
+| `PassHitFilter` | `BrowserInputRouter` + `IInputOwnershipResolver` | 已替换；统一判断当前点属于 Web 还是 Host |
+| `BrowserOverlayPassMapStore` | `LegacyOverlayPassMapStore` | 已迁入 legacy 边界；消费旧 payload 并维护 ownership 动态 regions |
+| `PointerHitMode.StaticPassRects` | `InputOwnershipSettings.OwnershipMap.StaticRegions` | 已替换为本地静态 ownership 配置 |
+| `PointerHitMode.DomPassMap` | `InputOwnershipSettings.OwnershipMap.DynamicRegions` | 已替换为 Web SDK 推送的 ownership 动态区域 |
 
-旧 `Overlay/` 目录不应继续承载新能力。迁移完成后可以删除，或迁入 `Ownership/Legacy/`；不要让新代码在 `Overlay/PassMap.cs` 上继续加字段。
+旧 `Overlay/` 目录已经删除。后续如果需要兼容旧语义，只能在 `Ownership/Legacy/` 或协议兼容层完成转换，不得恢复 `Overlay/PassMap.cs` 作为事实源。
 
 命中链路：
 
@@ -235,7 +234,7 @@ f32 radius
 迁移期间：
 
 - Rust 可以继续接收旧 pass map JSON，但只能在 `ownership/legacy_pass.rs` 转换一次。转换结果进入 ownership 数据结构，之后由新 payload 发布；如必须兼容旧 host，再由兼容出口生成旧 payload。
-- Unity host 可以通过 `LegacyPassMapAdapter` 把旧 `OverlayPassMap` 适配成 `InputOwnershipMap(defaultOwner = Web)`。
+- Unity host 通过 `LegacyOverlayPassMapStore` 把旧 `OverlayPassMap` 直接适配成 `InputOwnershipMap(defaultOwner = Web)` 下的 Host dynamic regions。
 - 新 payload 落地后，`OverlayPassMap` 只用于旧网页或旧 SDK。
 - 宿主侧不解析网页 JSON，只消费 typed payload。
 
@@ -373,12 +372,15 @@ packages/overlay/src/
 
 目标：在 Unity host 内部完成 `InputOwnershipMap` 查询和 raycast 过滤，不依赖 Web SDK 改造。
 
+状态：源码实现已完成，等待 Unity 内实测回归。
+
 交付：
 
-- 新增或重命名 `InputOwnershipMap`、`InputRegion`、`InputOwner`、`InputRegionShape`。
-- `BrowserInputRouter` 改为 `ResolveOwner`。
-- 静态配置从 pass rect 改为 ownership regions。
-- 旧 `PassMap` 通过 `Ownership/Legacy/` adapter 映射到 ownership map。
+- 已新增 `InputOwnershipMap`、`InputRegion`、`InputOwner`、`InputRegionShape` 和 `InputOwnershipSettings`。
+- `BrowserInputRouter` 已改为 `ResolveOwner`，`BrowserInputController` 只依赖 `IInputOwnershipResolver`。
+- `PageRenderer` 的公开输入配置源已改为 `InputOwnershipSettings`。
+- 旧 `OverlayPassMap` 通过 `Ownership/Legacy/LegacyOverlayPassMapStore` 直接映射到 ownership dynamic regions。
+- 旧 `Overlay/` C# pass 类型已经删除。
 
 验证：
 

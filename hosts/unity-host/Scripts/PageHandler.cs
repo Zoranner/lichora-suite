@@ -22,7 +22,7 @@ namespace KimoTech.LichoraHost
             int width,
             int height,
             RectTransform rectTransform,
-            BrowserOverlaySettings overlaySettings,
+            InputOwnershipSettings ownershipSettings,
             BrowserIpcInputWriter ipcInputWriter,
             BrowserIpcFrameReader ipcFrameReader,
             BrowserIpcOutputReader ipcOutputReader
@@ -56,7 +56,7 @@ namespace KimoTech.LichoraHost
                 rectTransform,
                 width,
                 height,
-                overlaySettings
+                ownershipSettings
             );
             _ImeInputState = new ImeInputState(
                 PushImeComposition,

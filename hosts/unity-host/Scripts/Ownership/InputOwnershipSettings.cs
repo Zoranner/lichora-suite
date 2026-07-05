@@ -4,7 +4,7 @@ using UnityEngine;
 namespace KimoTech.LichoraHost
 {
     [Serializable]
-    public sealed class InputOwnershipSettings
+    public sealed class InputOwnershipSettings : IInputOwnershipResolver
     {
         [SerializeField]
         private InputOwnershipMap _OwnershipMap = new InputOwnershipMap();
@@ -18,6 +18,11 @@ namespace KimoTech.LichoraHost
         public void SetDynamicRegions(InputRegion[] regions)
         {
             OwnershipMap.SetDynamicRegions(regions);
+        }
+
+        public void SetStaticRegions(InputRegion[] regions)
+        {
+            OwnershipMap.StaticRegions = regions;
         }
 
         public void ClearDynamicRegions()
