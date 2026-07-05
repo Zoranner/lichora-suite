@@ -16,6 +16,7 @@ interface FakeRect {
 class FakeElement {
     public attributes = new Map<string, string>();
     public style: Partial<CSSStyleDeclaration> = {};
+    public parentElement: FakeElement | null = null;
     private rect: DOMRect;
 
     public constructor(rect: FakeRect) {
@@ -42,6 +43,19 @@ class FakeElement {
 
     public matches(selector: string): boolean {
         return selector === '[data-overlay="pass"]' && this.attributes.get("data-overlay") === "pass";
+    }
+
+    public contains(element: FakeElement): boolean {
+        let current: FakeElement | null = element;
+        while (current !== null) {
+            if (current === this) {
+                return true;
+            }
+
+            current = current.parentElement;
+        }
+
+        return false;
     }
 
     public getBoundingClientRect(): DOMRect {
@@ -298,6 +312,21 @@ describe("@lichora/overlay", () => {
             { id: 2, shape: "rect", x: 0, y: 75, width: 100, height: 25, disabled: false },
             { id: 3, shape: "rect", x: 0, y: 25, width: 25, height: 50, disabled: false },
             { id: 4, shape: "rect", x: 75, y: 25, width: 25, height: 50, disabled: false },
+        ]);
+    });
+
+    test("keeps pass element descendants inside pass regions", () => {
+        const fakeWindow = installFakeWindow();
+        const passElement = new FakeElement({ x: 0, y: 0, width: 100, height: 100 });
+        const child = new FakeElement({ x: 25, y: 25, width: 50, height: 50 });
+        passElement.setAttribute("data-overlay", "pass");
+        child.parentElement = passElement;
+        fakeWindow.document.elements.push(passElement, child);
+
+        enable();
+
+        expect(latestPayload(fakeWindow).regions).toEqual([
+            { id: 1, shape: "rect", x: 0, y: 0, width: 100, height: 100, disabled: false },
         ]);
     });
 

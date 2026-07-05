@@ -165,7 +165,12 @@ function getCoveringNonPassRects(element: Element, rect: RectLike): RectLike[] {
                 break;
             }
 
-            if (seen.has(stackedElement) || isPassElement(stackedElement) || !isVisibleElement(stackedElement)) {
+            if (
+                seen.has(stackedElement) ||
+                element.contains(stackedElement) ||
+                isPassElement(stackedElement) ||
+                !isVisibleElement(stackedElement)
+            ) {
                 continue;
             }
 
