@@ -59,11 +59,7 @@ namespace KimoTech.LichoraHost
                 int written;
                 try
                 {
-                    written = _OutputReader.TryPopEvent(
-                        _OutputBuffer,
-                        out var outputKind,
-                        out var outputSequence
-                    );
+                    written = _OutputReader.TryPopEvent(_OutputBuffer, out _, out _);
                 }
                 catch (Exception exception)
                 {
@@ -77,8 +73,6 @@ namespace KimoTech.LichoraHost
                 }
 
                 hasEvents = true;
-                _ = outputKind;
-                _ = outputSequence;
                 DecodeAndApply(written);
             }
 
