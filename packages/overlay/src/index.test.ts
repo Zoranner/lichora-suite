@@ -55,6 +55,12 @@ class FakeDocument {
     public querySelectorAll(selector: string): FakeElement[] {
         return this.elements.filter((element) => element.matches(selector));
     }
+
+    public elementsFromPoint(x: number, y: number): FakeElement[] {
+        return this.elements
+            .filter((element) => containsPoint(element.getBoundingClientRect(), x, y))
+            .toReversed();
+    }
 }
 
 class FakeMutationObserver {
@@ -193,6 +199,10 @@ function latestPayload(fakeWindow: FakeWindow) {
     return JSON.parse(latest!.slice(BRIDGE_PREFIX.length));
 }
 
+function containsPoint(rect: DOMRect, x: number, y: number): boolean {
+    return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
 beforeEach(() => {
     FakeMutationObserver.instances = [];
     FakeResizeObserver.instances = [];
@@ -271,6 +281,23 @@ describe("@lichora/overlay", () => {
         const payload = latestPayload(fakeWindow);
         expect(payload.regions).toEqual([
             { id: 1, shape: "rect", x: 0, y: 0, width: 20, height: 30, disabled: false },
+        ]);
+    });
+
+    test("subtracts visible non-pass elements covering pass regions", () => {
+        const fakeWindow = installFakeWindow();
+        const passElement = new FakeElement({ x: 0, y: 0, width: 100, height: 100 });
+        const dialog = new FakeElement({ x: 25, y: 25, width: 50, height: 50 });
+        passElement.setAttribute("data-overlay", "pass");
+        fakeWindow.document.elements.push(passElement, dialog);
+
+        enable();
+
+        expect(latestPayload(fakeWindow).regions).toEqual([
+            { id: 1, shape: "rect", x: 0, y: 0, width: 100, height: 25, disabled: false },
+            { id: 2, shape: "rect", x: 0, y: 75, width: 100, height: 25, disabled: false },
+            { id: 3, shape: "rect", x: 0, y: 25, width: 25, height: 50, disabled: false },
+            { id: 4, shape: "rect", x: 75, y: 25, width: 25, height: 50, disabled: false },
         ]);
     });
 
