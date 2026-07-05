@@ -26,6 +26,7 @@ namespace KimoTech.LichoraHost
         private BrowserCoordinateMapper _CoordinateMapper;
         private PassHitFilter _PassHitFilter;
         private bool _BrowserPointerCaptured;
+        private bool _HasLoggedPassThroughHit;
 
         private RectTransform _RectTransform;
         protected RectTransform RectTransform
@@ -59,6 +60,14 @@ namespace KimoTech.LichoraHost
             }
 
             var isBrowserHit = HitFilter.IsBrowserHit(screenPosition, eventCamera);
+            if (!isBrowserHit && !_HasLoggedPassThroughHit)
+            {
+                _HasLoggedPassThroughHit = true;
+                Debug.Log(
+                    $"[BrowserInputController] Browser raycast passed through at screenPosition={screenPosition}."
+                );
+            }
+
             if (!isBrowserHit && IsMouseButtonDown())
             {
                 _FocusController?.FocusOut();

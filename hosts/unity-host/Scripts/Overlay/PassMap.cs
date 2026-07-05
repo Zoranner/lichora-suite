@@ -16,6 +16,8 @@ namespace KimoTech.LichoraHost
             set => _StaticPassRects = value ?? Array.Empty<PassRegion>();
         }
 
+        public int DynamicPassRectCount => _DynamicPassRects?.Length ?? 0;
+
         public bool ContainsStaticPassRect(Vector2 browserNormalizedPosition)
         {
             return ContainsPassRect(_StaticPassRects, browserNormalizedPosition);

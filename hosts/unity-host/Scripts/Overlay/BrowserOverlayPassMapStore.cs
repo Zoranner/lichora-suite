@@ -6,6 +6,8 @@ namespace KimoTech.LichoraHost
     internal sealed class BrowserOverlayPassMapStore
     {
         private readonly BrowserOverlaySettings _OverlaySettings;
+        private ulong _LastLoggedVersion;
+        private int _LastLoggedDynamicRectCount = -1;
 
         public BrowserOverlayPassMapStore(BrowserOverlaySettings overlaySettings)
         {
@@ -21,16 +23,43 @@ namespace KimoTech.LichoraHost
 
             if (!IsValidPayload(payload))
             {
+                Debug.LogWarning(
+                    $"[BrowserOverlayPassMapStore] Ignored invalid overlay pass map. version={payload.Version}, enabled={payload.Enabled}, viewport={payload.ViewportWidth}x{payload.ViewportHeight}, scale={payload.DeviceScaleFactor}"
+                );
                 Clear();
                 return;
             }
 
-            _OverlaySettings.SetDynamicPassRects(BuildDynamicPassRects(payload));
+            var dynamicPassRects = BuildDynamicPassRects(payload);
+            _OverlaySettings.SetDynamicPassRects(dynamicPassRects);
+            LogApplied(payload, dynamicPassRects.Length);
         }
 
         public void Clear()
         {
+            var dynamicRectCount = _OverlaySettings?.PassMap?.DynamicPassRectCount ?? 0;
             _OverlaySettings?.ClearDynamicPassRects();
+            if (dynamicRectCount > 0)
+            {
+                Debug.Log("[BrowserOverlayPassMapStore] Cleared overlay pass map.");
+            }
+        }
+
+        private void LogApplied(BrowserOverlayPassMapPayload payload, int dynamicRectCount)
+        {
+            if (
+                payload.Version == _LastLoggedVersion
+                && dynamicRectCount == _LastLoggedDynamicRectCount
+            )
+            {
+                return;
+            }
+
+            _LastLoggedVersion = payload.Version;
+            _LastLoggedDynamicRectCount = dynamicRectCount;
+            Debug.Log(
+                $"[BrowserOverlayPassMapStore] Applied overlay pass map. version={payload.Version}, regions={payload.Regions.Length}, dynamicRects={dynamicRectCount}, viewport={payload.ViewportWidth}x{payload.ViewportHeight}"
+            );
         }
 
         private static PassRegion[] BuildDynamicPassRects(BrowserOverlayPassMapPayload payload)
