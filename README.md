@@ -14,7 +14,7 @@ Lichora 是面向宿主应用的可嵌入 Web Surface 运行时。当前实现�
 - Capture 使用 `FrameRing` 一等通道。
 - Mouse move 使用 latest-only 状态；点击、滚轮、键盘、IME 和脚本请求使用 typed queue。
 - Status page 是必需通道，用于定位输入积压、丢帧、ack 延迟和进程状态。
-- Web/Host 融合和 PassMap 设计见 `docs/design/web-host-overlay.md`。
+- Web/Host 融合和输入归属设计见 `docs/design/web-host-overlay.md`。
 
 ## 项目结构
 
