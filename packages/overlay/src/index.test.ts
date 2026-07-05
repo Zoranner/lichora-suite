@@ -330,6 +330,21 @@ describe("@lichora/overlay", () => {
         ]);
     });
 
+    test("keeps pass element ancestors from occluding pass regions", () => {
+        const fakeWindow = installFakeWindow();
+        const ancestor = new FakeElement({ x: 0, y: 0, width: 100, height: 100 });
+        const passElement = new FakeElement({ x: 0, y: 0, width: 100, height: 100 });
+        passElement.setAttribute("data-overlay", "pass");
+        passElement.parentElement = ancestor;
+        fakeWindow.document.elements.push(passElement, ancestor);
+
+        enable();
+
+        expect(latestPayload(fakeWindow).regions).toEqual([
+            { id: 1, shape: "rect", x: 0, y: 0, width: 100, height: 100, disabled: false },
+        ]);
+    });
+
     test("limits regions to 256 and keeps version as a JSON string", () => {
         const fakeWindow = installFakeWindow();
         for (let index = 0; index < 300; index += 1) {
