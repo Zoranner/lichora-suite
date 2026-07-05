@@ -3,13 +3,13 @@ using UnityEngine;
 
 namespace KimoTech.LichoraHost
 {
-    internal sealed class BrowserOverlayPassMapStore
+    internal sealed class LegacyOverlayPassMapStore
     {
         private readonly BrowserOverlaySettings _OverlaySettings;
         private ulong _LastLoggedVersion;
         private int _LastLoggedDynamicRectCount = -1;
 
-        public BrowserOverlayPassMapStore(BrowserOverlaySettings overlaySettings)
+        public LegacyOverlayPassMapStore(BrowserOverlaySettings overlaySettings)
         {
             _OverlaySettings = overlaySettings;
         }
@@ -24,7 +24,7 @@ namespace KimoTech.LichoraHost
             if (!IsValidPayload(payload))
             {
                 Debug.LogWarning(
-                    $"[BrowserOverlayPassMapStore] Ignored invalid overlay pass map. version={payload.Version}, enabled={payload.Enabled}, viewport={payload.ViewportWidth}x{payload.ViewportHeight}, scale={payload.DeviceScaleFactor}"
+                    $"[LegacyOverlayPassMapStore] Ignored invalid overlay pass map. version={payload.Version}, enabled={payload.Enabled}, viewport={payload.ViewportWidth}x{payload.ViewportHeight}, scale={payload.DeviceScaleFactor}"
                 );
                 Clear();
                 return;
@@ -41,7 +41,7 @@ namespace KimoTech.LichoraHost
             _OverlaySettings?.ClearDynamicPassRects();
             if (dynamicRectCount > 0)
             {
-                Debug.Log("[BrowserOverlayPassMapStore] Cleared overlay pass map.");
+                Debug.Log("[LegacyOverlayPassMapStore] Cleared overlay pass map.");
             }
         }
 
@@ -58,7 +58,7 @@ namespace KimoTech.LichoraHost
             _LastLoggedVersion = payload.Version;
             _LastLoggedDynamicRectCount = dynamicRectCount;
             Debug.Log(
-                $"[BrowserOverlayPassMapStore] Applied overlay pass map. version={payload.Version}, regions={payload.Regions.Length}, dynamicRects={dynamicRectCount}, viewport={payload.ViewportWidth}x{payload.ViewportHeight}"
+                $"[LegacyOverlayPassMapStore] Applied overlay pass map. version={payload.Version}, regions={payload.Regions.Length}, dynamicRects={dynamicRectCount}, viewport={payload.ViewportWidth}x{payload.ViewportHeight}"
             );
         }
 

@@ -10,7 +10,7 @@ namespace KimoTech.LichoraHost
 
         private readonly BrowserIpcOutputReader _OutputReader;
         private readonly BrowserOutputState _OutputState;
-        private readonly BrowserOverlayPassMapStore _OverlayPassMapStore;
+        private readonly LegacyOverlayPassMapStore _OverlayPassMapStore;
         private readonly byte[] _OutputBuffer = new byte[OutputBufferSize];
         private bool _HasLoggedInvalidOutput;
 
@@ -24,7 +24,7 @@ namespace KimoTech.LichoraHost
         {
             _OutputReader = outputReader ?? throw new ArgumentNullException(nameof(outputReader));
             _OutputState = new BrowserOutputState(rectTransform, width, height);
-            _OverlayPassMapStore = new BrowserOverlayPassMapStore(overlaySettings);
+            _OverlayPassMapStore = new LegacyOverlayPassMapStore(overlaySettings);
         }
 
         public ISurroundingTextSnapshotProvider SurroundingTextProvider => _OutputState;

@@ -24,9 +24,9 @@ namespace KimoTech.LichoraHost
         private BrowserFocusController _FocusController;
         private BrowserPointerInputSource _PointerInputSource;
         private BrowserCoordinateMapper _CoordinateMapper;
-        private PassHitFilter _PassHitFilter;
-        private bool _BrowserPointerCaptured;
-        private bool _HasLoggedPassThroughHit;
+        private BrowserInputRouter _InputRouter;
+        private BrowserPointerCapture _PointerCapture;
+        private bool _HasLoggedHostOwnerHit;
 
         private RectTransform _RectTransform;
         protected RectTransform RectTransform
@@ -46,36 +46,37 @@ namespace KimoTech.LichoraHost
         public string CompositionString => _CompositionString;
         public string InputString => _InputString;
 
-        public BrowserOverlaySettings OverlaySettings
+        public IInputOwnershipResolver OwnershipResolver
         {
-            get => HitFilter.Settings;
-            set => HitFilter.Settings = value;
+            get => InputRouter.OwnershipResolver;
+            set => InputRouter.OwnershipResolver = value;
         }
 
         public bool IsRaycastLocationValid(Vector2 screenPosition, Camera eventCamera)
         {
-            if (_BrowserPointerCaptured)
+            if (PointerCapture.HasCapture && PointerCapture.Owner == InputOwner.Web)
             {
                 return true;
             }
 
-            var isBrowserHit = HitFilter.IsBrowserHit(screenPosition, eventCamera);
-            if (!isBrowserHit && !_HasLoggedPassThroughHit)
+            var owner = InputRouter.ResolveOwner(screenPosition, eventCamera);
+            var isBrowserOwner = owner == InputOwner.Web;
+            if (!isBrowserOwner && !_HasLoggedHostOwnerHit)
             {
-                _HasLoggedPassThroughHit = true;
+                _HasLoggedHostOwnerHit = true;
                 Debug.Log(
-                    $"[BrowserInputController] Browser raycast passed through at screenPosition={screenPosition}."
+                    $"[BrowserInputController] Browser raycast yielded to host at screenPosition={screenPosition}."
                 );
             }
 
-            if (!isBrowserHit && IsMouseButtonDown())
+            if (!isBrowserOwner && IsMouseButtonDown())
             {
                 _FocusController?.FocusOut();
                 PointerInputSource.Exit();
                 SyncMouseState();
             }
 
-            return isBrowserHit;
+            return isBrowserOwner;
         }
 
         public void OnPointerEnter(PointerEventData eventData)
@@ -86,7 +87,7 @@ namespace KimoTech.LichoraHost
 
         public void OnPointerExit(PointerEventData eventData)
         {
-            if (_BrowserPointerCaptured)
+            if (PointerCapture.HasCapture && PointerCapture.Owner == InputOwner.Web)
             {
                 return;
             }
@@ -113,7 +114,7 @@ namespace KimoTech.LichoraHost
                 return;
             }
 
-            _BrowserPointerCaptured = true;
+            PointerCapture.Capture(InputOwner.Web);
             FocusController.FocusIn();
 
             PointerInputSource.Press(eventData);
@@ -128,7 +129,7 @@ namespace KimoTech.LichoraHost
             }
 
             PointerInputSource.Release(eventData);
-            _BrowserPointerCaptured = false;
+            PointerCapture.Release();
             SyncMouseState();
         }
 
@@ -151,7 +152,7 @@ namespace KimoTech.LichoraHost
 
         public void ResetPointerState()
         {
-            _BrowserPointerCaptured = false;
+            PointerCapture.Release();
             PointerInputSource.Reset();
             SyncMouseState();
         }
@@ -374,32 +375,37 @@ namespace KimoTech.LichoraHost
             }
         }
 
-        private PassHitFilter HitFilter
+        private BrowserInputRouter InputRouter
         {
             get
             {
-                if (_PassHitFilter == null)
+                if (_InputRouter == null)
                 {
-                    _PassHitFilter = new PassHitFilter(CoordinateMapper, null);
+                    _InputRouter = new BrowserInputRouter(CoordinateMapper, null);
                 }
 
-                return _PassHitFilter;
+                return _InputRouter;
+            }
+        }
+
+        private BrowserPointerCapture PointerCapture
+        {
+            get
+            {
+                if (_PointerCapture == null)
+                {
+                    _PointerCapture = new BrowserPointerCapture();
+                }
+
+                return _PointerCapture;
             }
         }
 
         private bool ShouldHandlePointerEvent(PointerEventData eventData, bool allowCapturedPointer)
         {
-            if (allowCapturedPointer && _BrowserPointerCaptured)
-            {
-                return true;
-            }
-
-            return HitFilter.IsBrowserHit(
-                eventData.position,
-                eventData.pressEventCamera != null
-                    ? eventData.pressEventCamera
-                    : eventData.enterEventCamera
-            );
+            var owner = InputRouter.ResolveOwner(eventData);
+            var effectiveOwner = PointerCapture.ResolveEffectiveOwner(owner, allowCapturedPointer);
+            return effectiveOwner == InputOwner.Web;
         }
 
         private void SyncMouseState()

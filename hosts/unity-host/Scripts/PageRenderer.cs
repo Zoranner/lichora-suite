@@ -42,7 +42,7 @@ namespace KimoTech.LichoraHost
                 _InputController = gameObject.AddComponent<BrowserInputController>();
             }
 
-            _InputController.OverlaySettings = _OverlaySettings;
+            _InputController.OwnershipResolver = new LegacyPassOwnershipResolver(_OverlaySettings);
 
             var width = (int)RectTransform.rect.width;
             var height = (int)RectTransform.rect.height;
