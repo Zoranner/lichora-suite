@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import fixturePassMap from "../fixtures/pass-map.json";
 import { disable, enable, pass, refreshPassMap, unpass } from "./index";
+import { OVERLAY_PASS_MAP_CONSOLE_PREFIX } from "./bridge";
 
 const BRIDGE_PREFIX = "__LICHORA_OVERLAY_PASS_MAP__:";
 let disposers: Array<() => void> = [];
@@ -211,6 +213,13 @@ afterEach(() => {
 });
 
 describe("@lichora/overlay", () => {
+    test("fixture payload uses the shared console bridge contract", () => {
+        expect(OVERLAY_PASS_MAP_CONSOLE_PREFIX).toBe(BRIDGE_PREFIX);
+        expect(JSON.stringify(fixturePassMap)).toBe(
+            '{"version":"42","viewportWidth":1280,"viewportHeight":720,"deviceScaleFactor":1.25,"enabled":true,"regions":[{"id":1,"shape":"rect","x":120.5,"y":80.25,"width":640,"height":360,"disabled":false},{"id":2,"shape":"rect","x":32,"y":48,"width":128,"height":96,"disabled":true}]}',
+        );
+    });
+
     test("scans data-overlay pass elements and API registrations into console pass maps", () => {
         const fakeWindow = installFakeWindow();
         const scanned = new FakeElement({ x: 10, y: 20, width: 100, height: 50 });

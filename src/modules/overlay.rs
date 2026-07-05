@@ -232,4 +232,25 @@ mod tests {
 
         assert!(parse_overlay_pass_map_console_payload(&payload).is_err());
     }
+
+    #[test]
+    fn parses_shared_sdk_fixture_payload() {
+        let output = parse_overlay_pass_map_console_payload(include_str!(
+            "../../packages/overlay/fixtures/pass-map.json"
+        ))
+        .unwrap();
+
+        assert_eq!(42, output.version);
+        assert_eq!(1280, output.viewport_width);
+        assert_eq!(720, output.viewport_height);
+        assert_eq!(1.25, output.device_scale_factor);
+        assert!(output.enabled);
+        assert_eq!(2, output.regions.len());
+        assert_eq!(1, output.regions[0].shape);
+        assert_eq!(120.5, output.regions[0].x);
+        assert_eq!(80.25, output.regions[0].y);
+        assert_eq!(640.0, output.regions[0].width);
+        assert_eq!(360.0, output.regions[0].height);
+        assert!(output.regions[1].disabled);
+    }
 }

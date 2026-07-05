@@ -360,7 +360,7 @@ src/modules/overlay.rs
 - bun test 或等价 bun 命令。
 - Rust 编码和解析测试。
 - Unity 用户实测 DOM pass 区域穿透。
-- 后续补示例受控页面和正式 CEF bridge 验证。
+- 正式 CEF bridge 验证仍在后续阶段。
 
 ### BrowserAlpha
 

@@ -1,0 +1,27 @@
+{
+    "version": "42",
+    "viewportWidth": 1280,
+    "viewportHeight": 720,
+    "deviceScaleFactor": 1.25,
+    "enabled": true,
+    "regions": [
+        {
+            "id": 1,
+            "shape": "rect",
+            "x": 120.5,
+            "y": 80.25,
+            "width": 640,
+            "height": 360,
+            "disabled": false
+        },
+        {
+            "id": 2,
+            "shape": "rect",
+            "x": 32,
+            "y": 48,
+            "width": 128,
+            "height": 96,
+            "disabled": true
+        }
+    ]
+}

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lichora Overlay Pass Map Example</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      color: #142338;
+      background: #edf3f7;
+    }
+
+    body {
+      display: grid;
+      grid-template-columns: 240px 1fr 280px;
+      gap: 16px;
+      padding: 16px;
+    }
+
+    aside,
+    section {
+      min-height: 0;
+      padding: 16px;
+      border: 1px solid rgba(32, 52, 74, 0.16);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.94);
+    }
+
+    aside {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    button,
+    input {
+      height: 36px;
+      border: 1px solid rgba(32, 52, 74, 0.24);
+      border-radius: 6px;
+      background: #fff;
+      color: #142338;
+      font: inherit;
+    }
+
+    .pass-zone {
+      display: grid;
+      place-items: center;
+      border: 2px dashed rgba(24, 132, 84, 0.82);
+      background: rgba(24, 132, 84, 0.08);
+      color: #155c3d;
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    .log {
+      height: 100%;
+      overflow: auto;
+      padding: 12px;
+      border-radius: 6px;
+      background: #142338;
+      color: #d9e8f5;
+      font: 12px/1.5 Consolas, "Cascadia Mono", monospace;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <aside>
+    <button id="toggle-pass">禁用穿透区域</button>
+    <button id="resize-pass">切换区域尺寸</button>
+    <input value="浏览器输入框" />
+    <button id="refresh">刷新 pass map</button>
+  </aside>
+
+  <section id="pass-zone" class="pass-zone" data-overlay="pass">
+    <div>
+      <strong>data-overlay="pass"</strong><br />
+      该区域会通过临时 console bridge 发布为 OverlayPassMap。
+    </div>
+  </section>
+
+  <section>
+    <div id="log" class="log"></div>
+  </section>
+
+  <script type="module">
+    import { disable, enable, refreshPassMap } from "../src/index.ts";
+
+    const log = document.getElementById("log");
+    const passZone = document.getElementById("pass-zone");
+    const originalLog = console.log.bind(console);
+    let compact = false;
+    let passEnabled = true;
+
+    console.log = (...args) => {
+      originalLog(...args);
+      const message = String(args[0] ?? "");
+      if (message.startsWith("__LICHORA_OVERLAY_PASS_MAP__:")) {
+        log.textContent = JSON.stringify(
+          JSON.parse(message.slice("__LICHORA_OVERLAY_PASS_MAP__:".length)),
+          null,
+          2,
+        );
+      }
+    };
+
+    document.getElementById("toggle-pass").addEventListener("click", (event) => {
+      passEnabled = !passEnabled;
+      if (passEnabled) {
+        enable();
+      } else {
+        disable();
+      }
+      event.currentTarget.textContent = passEnabled ? "禁用穿透区域" : "启用穿透区域";
+    });
+
+    document.getElementById("resize-pass").addEventListener("click", () => {
+      compact = !compact;
+      passZone.style.margin = compact ? "60px 90px" : "0";
+      refreshPassMap();
+    });
+
+    document.getElementById("refresh").addEventListener("click", refreshPassMap);
+
+    enable();
+  </script>
+</body>
+</html>

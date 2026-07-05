@@ -336,6 +336,37 @@ namespace KimoTech.LichoraHost
             return NativeIpcResult.FromCode(code);
         }
 
+        public static NativeIpcResult TryPopBrowserOutputEvent(
+            IntPtr handle,
+            byte[] buffer,
+            out uint kind,
+            out ulong sequence,
+            out UIntPtr written
+        )
+        {
+            kind = 0;
+            sequence = 0;
+            written = UIntPtr.Zero;
+
+            if (handle == IntPtr.Zero || buffer == null || buffer.Length == 0)
+            {
+                return new NativeIpcResult(
+                    NativeIpcErrorCode.InvalidArgument,
+                    "browser output handle and buffer are required"
+                );
+            }
+
+            var code = ebi_browser_output_try_pop_event(
+                handle,
+                out kind,
+                out sequence,
+                buffer,
+                (UIntPtr)buffer.Length,
+                out written
+            );
+            return NativeIpcResult.FromCode(code);
+        }
+
         public static NativeIpcResult OpenBrowserFrame(
             IntPtr handle,
             string browserId,
@@ -536,6 +567,16 @@ namespace KimoTech.LichoraHost
         [DllImport(PLUGIN, CallingConvention = CallingConvention.Cdecl)]
         private static extern int ebi_browser_output_try_read_latest(
             IntPtr handle,
+            [Out] byte[] buffer,
+            UIntPtr bufferLength,
+            out UIntPtr written
+        );
+
+        [DllImport(PLUGIN, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int ebi_browser_output_try_pop_event(
+            IntPtr handle,
+            out uint kind,
+            out ulong sequence,
             [Out] byte[] buffer,
             UIntPtr bufferLength,
             out UIntPtr written

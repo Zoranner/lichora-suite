@@ -55,6 +55,20 @@ Viewport metadata comes from:
 
 Refreshes are scheduled from `MutationObserver`, `ResizeObserver`, `scroll`, and `resize`, with throttling. At most 256 regions are published.
 
+## Example page
+
+`examples/pass-map.html` is a self-contained browser example for package development. In the Unity BrowserRenderer project, the same test page is copied to:
+
+```text
+BrowserAssets/demo/overlay-pass-map.html
+```
+
+Use this Unity address for manual testing:
+
+```text
+local://BrowserAssets/demo/overlay-pass-map.html
+```
+
 ## API
 
 ```ts

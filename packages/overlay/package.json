@@ -12,6 +12,8 @@
     },
     "files": [
         "src",
+        "fixtures",
+        "examples",
         "README.md"
     ]
 }

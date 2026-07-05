@@ -372,7 +372,7 @@ bytes payload_json_utf8
 网页端 SDK 到浏览器进程需要稳定 bridge。可选路径：
 
 - 优先：CEF message router 或 process message，作为正式 bridge。
-- 过渡：约定 console 前缀，例如 `__EB_OVERLAY_HIT_MAP__:`，由 display handler 捕获。
+- 过渡：约定 console 前缀，例如 `__LICHORA_OVERLAY_PASS_MAP__:`，由 display handler 捕获。
 - 兜底：宿主适配层主动 `ExecuteScript` 请求刷新，但不能用于高频鼠标查询。
 
 正式设计应避免把 console 作为长期协议。console 可以用于 caret/surrounding text 这类低风险内部探针，但 overlay pass map 是用户可见能力，应逐步转到明确 bridge。

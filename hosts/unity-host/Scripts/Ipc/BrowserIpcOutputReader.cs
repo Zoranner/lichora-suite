@@ -24,6 +24,25 @@ namespace KimoTech.LichoraHost
             return checked((int)written.ToUInt64());
         }
 
+        public int TryPopEvent(byte[] buffer, out uint kind, out ulong sequence)
+        {
+            if (_Handle.IsClosed)
+            {
+                throw new ObjectDisposedException(nameof(BrowserIpcClient));
+            }
+
+            BrowserIpcNative
+                .TryPopBrowserOutputEvent(
+                    _Handle.DangerousHandle,
+                    buffer,
+                    out kind,
+                    out sequence,
+                    out var written
+                )
+                .ThrowIfFailed();
+            return checked((int)written.ToUInt64());
+        }
+
         public void Dispose()
         {
             _Handle.Dispose();

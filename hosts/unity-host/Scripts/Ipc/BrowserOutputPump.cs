@@ -6,6 +6,7 @@ namespace KimoTech.LichoraHost
     public sealed class BrowserOutputPump : IDisposable
     {
         private const int OutputBufferSize = 64 * 1024;
+        private const int MaxOutputEventsPerFrame = 64;
 
         private readonly BrowserIpcOutputReader _OutputReader;
         private readonly BrowserOutputState _OutputState;
@@ -30,7 +31,10 @@ namespace KimoTech.LichoraHost
 
         public void ReadLatestAndApplyMainThreadUpdates()
         {
-            ReadLatest();
+            if (!ReadQueue())
+            {
+                ReadLatest();
+            }
             _OutputState.ApplyPendingImePosition();
         }
 
@@ -44,6 +48,41 @@ namespace KimoTech.LichoraHost
         {
             _OverlayPassMapStore.Clear();
             _OutputReader.Dispose();
+        }
+
+        private bool ReadQueue()
+        {
+            var hasEvents = false;
+
+            for (var index = 0; index < MaxOutputEventsPerFrame; index += 1)
+            {
+                int written;
+                try
+                {
+                    written = _OutputReader.TryPopEvent(
+                        _OutputBuffer,
+                        out var outputKind,
+                        out var outputSequence
+                    );
+                }
+                catch (Exception exception)
+                {
+                    LogInvalidOutput($"queue read failed: {exception.Message}");
+                    return hasEvents;
+                }
+
+                if (written <= 0)
+                {
+                    return hasEvents;
+                }
+
+                hasEvents = true;
+                _ = outputKind;
+                _ = outputSequence;
+                DecodeAndApply(written);
+            }
+
+            return hasEvents;
         }
 
         private void ReadLatest()
@@ -64,6 +103,11 @@ namespace KimoTech.LichoraHost
                 return;
             }
 
+            DecodeAndApply(written);
+        }
+
+        private void DecodeAndApply(int written)
+        {
             if (
                 !BrowserIpcOutputPayload.TryDecode(
                     _OutputBuffer,
