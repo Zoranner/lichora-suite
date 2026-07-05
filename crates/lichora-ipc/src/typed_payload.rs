@@ -29,6 +29,7 @@ pub enum OutputPayloadKind {
     ScriptResult = 3,
     PageEvent = 4,
     OverlayPassMap = 5,
+    InputOwnershipMap = 6,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -137,12 +138,37 @@ pub struct OverlayPassMapOutput {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct InputOwnershipRegionOutput {
+    pub id: u32,
+    pub owner: u8,
+    pub shape: u8,
+    pub disabled: bool,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub radius: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InputOwnershipMapOutput {
+    pub version: u64,
+    pub viewport_width: i32,
+    pub viewport_height: i32,
+    pub device_scale_factor: f32,
+    pub enabled: bool,
+    pub default_owner: u8,
+    pub regions: Vec<InputOwnershipRegionOutput>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum OutputPayload {
     Caret(CaretOutput),
     SurroundingText(SurroundingTextOutput),
     ScriptResult(ScriptResultOutput),
     PageEvent(PageEventOutput),
     OverlayPassMap(OverlayPassMapOutput),
+    InputOwnershipMap(InputOwnershipMapOutput),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -374,6 +400,7 @@ impl OutputPayload {
             Self::ScriptResult(_) => OutputPayloadKind::ScriptResult,
             Self::PageEvent(_) => OutputPayloadKind::PageEvent,
             Self::OverlayPassMap(_) => OutputPayloadKind::OverlayPassMap,
+            Self::InputOwnershipMap(_) => OutputPayloadKind::InputOwnershipMap,
         }
     }
 
@@ -415,6 +442,19 @@ impl OutputPayload {
                 write_u32(&mut buffer, output.regions.len() as u32);
                 for region in &output.regions {
                     write_overlay_pass_region(&mut buffer, region);
+                }
+            }
+            Self::InputOwnershipMap(output) => {
+                write_u64(&mut buffer, output.version);
+                write_i32(&mut buffer, output.viewport_width);
+                write_i32(&mut buffer, output.viewport_height);
+                write_f32(&mut buffer, output.device_scale_factor);
+                buffer.push(u8::from(output.enabled));
+                buffer.push(output.default_owner);
+                buffer.extend_from_slice(&[0; 6]);
+                write_u32(&mut buffer, output.regions.len() as u32);
+                for region in &output.regions {
+                    write_input_ownership_region(&mut buffer, region);
                 }
             }
         }
@@ -475,6 +515,29 @@ impl OutputPayload {
                     viewport_height,
                     device_scale_factor,
                     enabled,
+                    regions,
+                })
+            }
+            kind if kind == OutputPayloadKind::InputOwnershipMap as u16 => {
+                let version = read_output_u64(buffer, &mut cursor)?;
+                let viewport_width = read_output_i32(buffer, &mut cursor)?;
+                let viewport_height = read_output_i32(buffer, &mut cursor)?;
+                let device_scale_factor = read_output_f32(buffer, &mut cursor)?;
+                let enabled = read_output_u8(buffer, &mut cursor)? != 0;
+                let default_owner = read_output_u8(buffer, &mut cursor)?;
+                skip_output_padding(buffer, &mut cursor, 6)?;
+                let region_count = read_output_u32(buffer, &mut cursor)?;
+                let mut regions = Vec::with_capacity(region_count as usize);
+                for _ in 0..region_count {
+                    regions.push(read_output_input_ownership_region(buffer, &mut cursor)?);
+                }
+                Self::InputOwnershipMap(InputOwnershipMapOutput {
+                    version,
+                    viewport_width,
+                    viewport_height,
+                    device_scale_factor,
+                    enabled,
+                    default_owner,
                     regions,
                 })
             }
@@ -578,6 +641,19 @@ fn write_overlay_pass_region(buffer: &mut Vec<u8>, region: &OverlayPassRegionOut
     write_f32(buffer, region.y);
     write_f32(buffer, region.width);
     write_f32(buffer, region.height);
+}
+
+fn write_input_ownership_region(buffer: &mut Vec<u8>, region: &InputOwnershipRegionOutput) {
+    write_u32(buffer, region.id);
+    buffer.push(region.owner);
+    buffer.push(region.shape);
+    buffer.push(u8::from(region.disabled));
+    buffer.push(0);
+    write_f32(buffer, region.x);
+    write_f32(buffer, region.y);
+    write_f32(buffer, region.width);
+    write_f32(buffer, region.height);
+    write_f32(buffer, region.radius);
 }
 
 fn read_input_header(buffer: &[u8]) -> Result<u16, InputPayloadDecodeError> {
@@ -737,6 +813,28 @@ fn read_output_overlay_pass_region(
         y: read_output_f32(buffer, cursor)?,
         width: read_output_f32(buffer, cursor)?,
         height: read_output_f32(buffer, cursor)?,
+    })
+}
+
+fn read_output_input_ownership_region(
+    buffer: &[u8],
+    cursor: &mut usize,
+) -> Result<InputOwnershipRegionOutput, OutputPayloadDecodeError> {
+    let id = read_output_u32(buffer, cursor)?;
+    let owner = read_output_u8(buffer, cursor)?;
+    let shape = read_output_u8(buffer, cursor)?;
+    let disabled = read_output_u8(buffer, cursor)? != 0;
+    skip_output_padding(buffer, cursor, 1)?;
+    Ok(InputOwnershipRegionOutput {
+        id,
+        owner,
+        shape,
+        disabled,
+        x: read_output_f32(buffer, cursor)?,
+        y: read_output_f32(buffer, cursor)?,
+        width: read_output_f32(buffer, cursor)?,
+        height: read_output_f32(buffer, cursor)?,
+        radius: read_output_f32(buffer, cursor)?,
     })
 }
 

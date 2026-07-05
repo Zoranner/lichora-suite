@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Lichora Overlay Pass Map Example</title>
+  <title>Lichora Ownership Overlay Example</title>
   <style>
     * {
       box-sizing: border-box;
@@ -52,7 +52,7 @@
       font: inherit;
     }
 
-    .pass-zone {
+    .host-zone {
       display: grid;
       place-items: center;
       border: 2px dashed rgba(24, 132, 84, 0.82);
@@ -79,13 +79,13 @@
     <button id="toggle-pass">禁用穿透区域</button>
     <button id="resize-pass">切换区域尺寸</button>
     <input value="浏览器输入框" />
-    <button id="refresh">刷新 pass map</button>
+    <button id="refresh">刷新 ownership map</button>
   </aside>
 
-  <section id="pass-zone" class="pass-zone" data-overlay="pass">
+  <section id="host-zone" class="host-zone" data-lichora="host">
     <div>
-      <strong>data-overlay="pass"</strong><br />
-      该区域会通过临时 console bridge 发布为 OverlayPassMap。
+      <strong>data-lichora="host"</strong><br />
+      该区域会按 ownership 主模型注册为 Host 区域，并通过临时 console bridge 发布为 InputOwnershipMap。
     </div>
   </section>
 
@@ -94,10 +94,10 @@
   </section>
 
   <script type="module">
-    import { disable, enable, refreshPassMap } from "../src/index.ts";
+    import { disable, enable, refresh } from "../src/index.ts";
 
     const log = document.getElementById("log");
-    const passZone = document.getElementById("pass-zone");
+    const hostZone = document.getElementById("host-zone");
     const originalLog = console.log.bind(console);
     let compact = false;
     let passEnabled = true;
@@ -105,9 +105,9 @@
     console.log = (...args) => {
       originalLog(...args);
       const message = String(args[0] ?? "");
-      if (message.startsWith("__LICHORA_OVERLAY_PASS_MAP__:")) {
+      if (message.startsWith("__LICHORA_INPUT_OWNERSHIP_MAP__:")) {
         log.textContent = JSON.stringify(
-          JSON.parse(message.slice("__LICHORA_OVERLAY_PASS_MAP__:".length)),
+          JSON.parse(message.slice("__LICHORA_INPUT_OWNERSHIP_MAP__:".length)),
           null,
           2,
         );
@@ -126,11 +126,11 @@
 
     document.getElementById("resize-pass").addEventListener("click", () => {
       compact = !compact;
-      passZone.style.margin = compact ? "60px 90px" : "0";
-      refreshPassMap();
+      hostZone.style.margin = compact ? "60px 90px" : "0";
+      refresh();
     });
 
-    document.getElementById("refresh").addEventListener("click", refreshPassMap);
+    document.getElementById("refresh").addEventListener("click", refresh);
 
     enable();
   </script>

@@ -17,7 +17,15 @@ export class OverlayObservers {
             this.mutationObserver = new MutationObserver(() => this.scheduleRefresh());
             this.mutationObserver.observe(currentDocument, {
                 attributes: true,
-                attributeFilter: ["data-overlay", "style", "class", "hidden", "disabled"],
+                attributeFilter: [
+                    "data-lichora",
+                    "data-lichora-disabled",
+                    "data-overlay",
+                    "style",
+                    "class",
+                    "hidden",
+                    "disabled",
+                ],
                 childList: true,
                 subtree: true,
             });

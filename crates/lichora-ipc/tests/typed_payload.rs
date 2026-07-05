@@ -1,8 +1,9 @@
 use ipc::{
-    CaretOutput, ImeCompositionInput, InputPayload, InputPayloadDecodeError, InputPayloadKind,
-    KeyboardKeyInput, MouseButtonInput, MouseLatest, MouseWheelInput, OutputPayload,
-    OutputPayloadDecodeError, OutputPayloadKind, OverlayPassMapOutput, OverlayPassRegionOutput,
-    PageEventOutput, ScriptRequestInput, ScriptResultOutput, SurroundingTextOutput,
+    CaretOutput, ImeCompositionInput, InputOwnershipMapOutput, InputOwnershipRegionOutput,
+    InputPayload, InputPayloadDecodeError, InputPayloadKind, KeyboardKeyInput, MouseButtonInput,
+    MouseLatest, MouseWheelInput, OutputPayload, OutputPayloadDecodeError, OutputPayloadKind,
+    OverlayPassMapOutput, OverlayPassRegionOutput, PageEventOutput, ScriptRequestInput,
+    ScriptResultOutput, SurroundingTextOutput,
 };
 
 fn input_header(kind: InputPayloadKind) -> Vec<u8> {
@@ -280,6 +281,69 @@ fn output_payload_encodes_overlay_pass_map_as_golden_bytes() {
 }
 
 #[test]
+fn output_payload_encodes_input_ownership_map_as_golden_bytes() {
+    assert_eq!(OutputPayloadKind::InputOwnershipMap as u16, 6);
+
+    let payload = OutputPayload::InputOwnershipMap(InputOwnershipMapOutput {
+        version: 8,
+        viewport_width: 1920,
+        viewport_height: 1080,
+        device_scale_factor: 2.0,
+        enabled: true,
+        default_owner: 2,
+        regions: vec![
+            InputOwnershipRegionOutput {
+                id: 20,
+                owner: 1,
+                shape: 2,
+                disabled: false,
+                x: 10.0,
+                y: 20.0,
+                width: 300.0,
+                height: 120.0,
+                radius: 12.0,
+            },
+            InputOwnershipRegionOutput {
+                id: 21,
+                owner: 2,
+                shape: 1,
+                disabled: true,
+                x: -1.0,
+                y: 0.0,
+                width: 640.0,
+                height: 480.0,
+                radius: 0.0,
+            },
+        ],
+    });
+
+    let mut expected = output_header(OutputPayloadKind::InputOwnershipMap);
+    expected.extend_from_slice(&8u64.to_le_bytes());
+    expected.extend_from_slice(&1920i32.to_le_bytes());
+    expected.extend_from_slice(&1080i32.to_le_bytes());
+    expected.extend_from_slice(&2.0f32.to_le_bytes());
+    expected.extend_from_slice(&[1, 2, 0, 0, 0, 0, 0, 0]);
+    expected.extend_from_slice(&2u32.to_le_bytes());
+    expected.extend_from_slice(&20u32.to_le_bytes());
+    expected.extend_from_slice(&[1, 2, 0, 0]);
+    expected.extend_from_slice(&10.0f32.to_le_bytes());
+    expected.extend_from_slice(&20.0f32.to_le_bytes());
+    expected.extend_from_slice(&300.0f32.to_le_bytes());
+    expected.extend_from_slice(&120.0f32.to_le_bytes());
+    expected.extend_from_slice(&12.0f32.to_le_bytes());
+    expected.extend_from_slice(&21u32.to_le_bytes());
+    expected.extend_from_slice(&[2, 1, 1, 0]);
+    expected.extend_from_slice(&(-1.0f32).to_le_bytes());
+    expected.extend_from_slice(&0.0f32.to_le_bytes());
+    expected.extend_from_slice(&640.0f32.to_le_bytes());
+    expected.extend_from_slice(&480.0f32.to_le_bytes());
+    expected.extend_from_slice(&0.0f32.to_le_bytes());
+
+    assert_eq!(payload.encode(), expected);
+    assert_eq!(OutputPayload::decode(&expected).unwrap(), payload);
+}
+
+#[test]
 fn output_payload_rejects_overlay_pass_map_trailing_bytes() {
     let mut encoded = OutputPayload::OverlayPassMap(OverlayPassMapOutput {
         version: 1,
@@ -287,6 +351,30 @@ fn output_payload_rejects_overlay_pass_map_trailing_bytes() {
         viewport_height: 600,
         device_scale_factor: 1.0,
         enabled: false,
+        regions: Vec::new(),
+    })
+    .encode();
+    let expected_end = encoded.len();
+    encoded.push(0);
+
+    assert_eq!(
+        OutputPayload::decode(&encoded).unwrap_err(),
+        OutputPayloadDecodeError::TrailingGarbage {
+            expected_end,
+            actual: expected_end + 1
+        }
+    );
+}
+
+#[test]
+fn output_payload_rejects_input_ownership_map_trailing_bytes() {
+    let mut encoded = OutputPayload::InputOwnershipMap(InputOwnershipMapOutput {
+        version: 1,
+        viewport_width: 800,
+        viewport_height: 600,
+        device_scale_factor: 1.0,
+        enabled: false,
+        default_owner: 1,
         regions: Vec::new(),
     })
     .encode();

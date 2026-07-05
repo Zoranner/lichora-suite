@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fixturePassMap from "../fixtures/pass-map.json";
-import { disable, enable, pass, refreshPassMap, unpass } from "./index";
-import { OVERLAY_PASS_MAP_CONSOLE_PREFIX } from "./bridge";
+import { disable, enable, pass, refresh, refreshPassMap, region, setDefaultOwner, unpass, unregion } from "./index";
+import { INPUT_OWNERSHIP_MAP_CONSOLE_PREFIX, OVERLAY_PASS_MAP_CONSOLE_PREFIX } from "./bridge";
+import { createInputOwnershipMap, toOwnershipPayload } from "./ownership-map";
 
-const BRIDGE_PREFIX = "__LICHORA_OVERLAY_PASS_MAP__:";
+const BRIDGE_PREFIX = "__LICHORA_INPUT_OWNERSHIP_MAP__:";
 let disposers: Array<() => void> = [];
 
 interface FakeRect {
@@ -41,8 +42,29 @@ class FakeElement {
         return this.attributes.has(name);
     }
 
+    public getAttribute(name: string): string | null {
+        return this.attributes.get(name) ?? null;
+    }
+
     public matches(selector: string): boolean {
-        return selector === '[data-overlay="pass"]' && this.attributes.get("data-overlay") === "pass";
+        return selector
+            .split(",")
+            .map((part) => part.trim())
+            .some((part) => {
+                if (part === '[data-overlay="pass"]') {
+                    return this.attributes.get("data-overlay") === "pass";
+                }
+
+                if (part === '[data-lichora="host"]') {
+                    return this.attributes.get("data-lichora") === "host";
+                }
+
+                if (part === '[data-lichora="web"]') {
+                    return this.attributes.get("data-lichora") === "web";
+                }
+
+                return false;
+            });
     }
 
     public contains(element: FakeElement): boolean {
@@ -228,6 +250,7 @@ afterEach(() => {
     }
     disposers = [];
     disable();
+    setDefaultOwner("web");
     delete (globalThis as { window?: unknown }).window;
     delete (globalThis as { document?: unknown }).document;
     delete (globalThis as { MutationObserver?: unknown }).MutationObserver;
@@ -238,7 +261,8 @@ afterEach(() => {
 
 describe("@lichora/overlay", () => {
     test("fixture payload uses the shared console bridge contract", () => {
-        expect(OVERLAY_PASS_MAP_CONSOLE_PREFIX).toBe(BRIDGE_PREFIX);
+        expect(INPUT_OWNERSHIP_MAP_CONSOLE_PREFIX).toBe(BRIDGE_PREFIX);
+        expect(OVERLAY_PASS_MAP_CONSOLE_PREFIX).toBe("__LICHORA_OVERLAY_PASS_MAP__:");
         expect(JSON.stringify(fixturePassMap)).toBe(
             '{"version":"42","viewportWidth":1280,"viewportHeight":720,"deviceScaleFactor":1.25,"enabled":true,"regions":[{"id":1,"shape":"rect","x":120.5,"y":80.25,"width":640,"height":360,"disabled":false},{"id":2,"shape":"rect","x":32,"y":48,"width":128,"height":96,"disabled":true}]}',
         );
@@ -260,10 +284,138 @@ describe("@lichora/overlay", () => {
         expect(payload.viewportHeight).toBe(600);
         expect(payload.deviceScaleFactor).toBe(2);
         expect(payload.enabled).toBe(true);
+        expect(payload.defaultOwner).toBe("web");
         expect(payload.regions).toEqual([
-            { id: 1, shape: "rect", x: 200, y: 100, width: 80, height: 40, disabled: false },
-            { id: 2, shape: "rect", x: 10, y: 20, width: 100, height: 50, disabled: false },
+            {
+                id: 1,
+                owner: "host",
+                shape: "rect",
+                x: 200,
+                y: 100,
+                width: 80,
+                height: 40,
+                radius: 0,
+                disabled: false,
+            },
+            {
+                id: 2,
+                owner: "host",
+                shape: "rect",
+                x: 10,
+                y: 20,
+                width: 100,
+                height: 50,
+                radius: 0,
+                disabled: false,
+            },
         ]);
+    });
+
+    test("scans data-lichora host elements as the primary ownership marker", () => {
+        const fakeWindow = installFakeWindow();
+        const scanned = new FakeElement({ x: 10, y: 20, width: 100, height: 50 });
+        scanned.setAttribute("data-lichora", "host");
+        fakeWindow.document.elements.push(scanned);
+
+        enable();
+
+        expect(latestPayload(fakeWindow).regions).toEqual([
+            {
+                id: 1,
+                owner: "host",
+                shape: "rect",
+                x: 10,
+                y: 20,
+                width: 100,
+                height: 50,
+                radius: 0,
+                disabled: false,
+            },
+        ]);
+    });
+
+    test("region registers ownership regions and unregion removes them", () => {
+        const fakeWindow = installFakeWindow();
+        const element = new FakeElement({ x: 30, y: 40, width: 120, height: 60 });
+
+        disposers.push(region(element, "host"));
+        enable();
+        expect(latestPayload(fakeWindow).regions).toEqual([
+            {
+                id: 1,
+                owner: "host",
+                shape: "rect",
+                x: 30,
+                y: 40,
+                width: 120,
+                height: 60,
+                radius: 0,
+                disabled: false,
+            },
+        ]);
+
+        unregion(element);
+        refresh();
+        expect(latestPayload(fakeWindow).regions).toEqual([]);
+    });
+
+    test("setDefaultOwner publishes web regions over host defaults", () => {
+        const fakeWindow = installFakeWindow();
+        const webPanel = new FakeElement({ x: 10, y: 20, width: 100, height: 50 });
+
+        setDefaultOwner("host");
+        disposers.push(region(webPanel, "web"));
+        enable();
+
+        const payload = latestPayload(fakeWindow);
+        expect(payload.enabled).toBe(true);
+        expect(payload.defaultOwner).toBe("host");
+        expect(payload.regions).toEqual([
+            {
+                id: 1,
+                owner: "web",
+                shape: "rect",
+                x: 10,
+                y: 20,
+                width: 100,
+                height: 50,
+                radius: 0,
+                disabled: false,
+            },
+        ]);
+    });
+
+    test("ownership model serializes default owner, owners, and rounded rectangles", () => {
+        const fakeWindow = installFakeWindow();
+        const rounded = new FakeElement({ x: 10, y: 20, width: 100, height: 50 });
+        rounded.style.borderRadius = "12px";
+
+        const map = createInputOwnershipMap(42n, true, "host", [
+            { element: rounded, owner: "web", options: {} },
+        ]);
+        const payload = toOwnershipPayload(map);
+
+        expect(payload).toEqual({
+            version: "42",
+            viewportWidth: 800,
+            viewportHeight: 600,
+            deviceScaleFactor: 2,
+            enabled: true,
+            defaultOwner: "host",
+            regions: [
+                {
+                    id: 1,
+                    owner: "web",
+                    shape: "roundedRect",
+                    x: 10,
+                    y: 20,
+                    width: 100,
+                    height: 50,
+                    radius: 12,
+                    disabled: false,
+                },
+            ],
+        });
     });
 
     test("API disabled option overrides data-overlay scanning for the same element", () => {
@@ -294,7 +446,17 @@ describe("@lichora/overlay", () => {
 
         const payload = latestPayload(fakeWindow);
         expect(payload.regions).toEqual([
-            { id: 1, shape: "rect", x: 0, y: 0, width: 20, height: 30, disabled: false },
+            {
+                id: 1,
+                owner: "host",
+                shape: "rect",
+                x: 0,
+                y: 0,
+                width: 20,
+                height: 30,
+                radius: 0,
+                disabled: false,
+            },
         ]);
     });
 
@@ -308,10 +470,28 @@ describe("@lichora/overlay", () => {
         enable();
 
         expect(latestPayload(fakeWindow).regions).toEqual([
-            { id: 1, shape: "rect", x: 0, y: 0, width: 100, height: 25, disabled: false },
-            { id: 2, shape: "rect", x: 0, y: 75, width: 100, height: 25, disabled: false },
-            { id: 3, shape: "rect", x: 0, y: 25, width: 25, height: 50, disabled: false },
-            { id: 4, shape: "rect", x: 75, y: 25, width: 25, height: 50, disabled: false },
+            { id: 1, owner: "host", shape: "rect", x: 0, y: 0, width: 100, height: 25, radius: 0, disabled: false },
+            { id: 2, owner: "host", shape: "rect", x: 0, y: 75, width: 100, height: 25, radius: 0, disabled: false },
+            { id: 3, owner: "host", shape: "rect", x: 0, y: 25, width: 25, height: 50, radius: 0, disabled: false },
+            { id: 4, owner: "host", shape: "rect", x: 75, y: 25, width: 25, height: 50, radius: 0, disabled: false },
+        ]);
+    });
+
+    test("subtracts data-lichora web panels covering host regions", () => {
+        const fakeWindow = installFakeWindow();
+        const hostView = new FakeElement({ x: 0, y: 0, width: 100, height: 100 });
+        const webPanel = new FakeElement({ x: 25, y: 25, width: 50, height: 50 });
+        hostView.setAttribute("data-lichora", "host");
+        webPanel.setAttribute("data-lichora", "web");
+        fakeWindow.document.elements.push(hostView, webPanel);
+
+        enable();
+
+        expect(latestPayload(fakeWindow).regions).toEqual([
+            { id: 1, owner: "host", shape: "rect", x: 0, y: 0, width: 100, height: 25, radius: 0, disabled: false },
+            { id: 2, owner: "host", shape: "rect", x: 0, y: 75, width: 100, height: 25, radius: 0, disabled: false },
+            { id: 3, owner: "host", shape: "rect", x: 0, y: 25, width: 25, height: 50, radius: 0, disabled: false },
+            { id: 4, owner: "host", shape: "rect", x: 75, y: 25, width: 25, height: 50, radius: 0, disabled: false },
         ]);
     });
 
@@ -326,7 +506,7 @@ describe("@lichora/overlay", () => {
         enable();
 
         expect(latestPayload(fakeWindow).regions).toEqual([
-            { id: 1, shape: "rect", x: 0, y: 0, width: 100, height: 100, disabled: false },
+            { id: 1, owner: "host", shape: "rect", x: 0, y: 0, width: 100, height: 100, radius: 0, disabled: false },
         ]);
     });
 
@@ -341,7 +521,7 @@ describe("@lichora/overlay", () => {
         enable();
 
         expect(latestPayload(fakeWindow).regions).toEqual([
-            { id: 1, shape: "rect", x: 0, y: 0, width: 100, height: 100, disabled: false },
+            { id: 1, owner: "host", shape: "rect", x: 0, y: 0, width: 100, height: 100, radius: 0, disabled: false },
         ]);
     });
 

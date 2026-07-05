@@ -10,6 +10,7 @@ namespace KimoTech.LichoraHost
         ScriptResult = 3,
         PageEvent = 4,
         OverlayPassMap = 5,
+        InputOwnershipMap = 6,
     }
 
     internal readonly struct BrowserOverlayPassRegionPayload
@@ -69,9 +70,76 @@ namespace KimoTech.LichoraHost
         public BrowserOverlayPassRegionPayload[] Regions { get; }
     }
 
+    internal readonly struct BrowserInputOwnershipRegionPayload
+    {
+        public BrowserInputOwnershipRegionPayload(
+            uint id,
+            byte owner,
+            byte shape,
+            bool disabled,
+            float x,
+            float y,
+            float width,
+            float height,
+            float radius
+        )
+        {
+            Id = id;
+            Owner = owner;
+            Shape = shape;
+            Disabled = disabled;
+            X = x;
+            Y = y;
+            Width = width;
+            Height = height;
+            Radius = radius;
+        }
+
+        public uint Id { get; }
+        public byte Owner { get; }
+        public byte Shape { get; }
+        public bool Disabled { get; }
+        public float X { get; }
+        public float Y { get; }
+        public float Width { get; }
+        public float Height { get; }
+        public float Radius { get; }
+    }
+
+    internal readonly struct BrowserInputOwnershipMapPayload
+    {
+        public BrowserInputOwnershipMapPayload(
+            ulong version,
+            int viewportWidth,
+            int viewportHeight,
+            float deviceScaleFactor,
+            bool enabled,
+            byte defaultOwner,
+            BrowserInputOwnershipRegionPayload[] regions
+        )
+        {
+            Version = version;
+            ViewportWidth = viewportWidth;
+            ViewportHeight = viewportHeight;
+            DeviceScaleFactor = deviceScaleFactor;
+            Enabled = enabled;
+            DefaultOwner = defaultOwner;
+            Regions = regions ?? Array.Empty<BrowserInputOwnershipRegionPayload>();
+        }
+
+        public ulong Version { get; }
+        public int ViewportWidth { get; }
+        public int ViewportHeight { get; }
+        public float DeviceScaleFactor { get; }
+        public bool Enabled { get; }
+        public byte DefaultOwner { get; }
+        public BrowserInputOwnershipRegionPayload[] Regions { get; }
+    }
+
     internal struct BrowserIpcOutputPayload
     {
         private const int OverlayPassRegionPayloadSize = 24;
+        private const int InputOwnershipRegionPayloadSize = 28;
 
         public BrowserIpcOutputPayloadKind Kind { get; set; }
         public int CaretX { get; set; }
@@ -88,6 +156,7 @@ namespace KimoTech.LichoraHost
         public string Url { get; set; }
         public string Detail { get; set; }
         public BrowserOverlayPassMapPayload OverlayPassMap { get; set; }
+        public BrowserInputOwnershipMapPayload InputOwnershipMap { get; set; }
 
         public static bool TryDecode(
             byte[] buffer,
@@ -149,6 +218,9 @@ namespace KimoTech.LichoraHost
                         break;
                     case BrowserIpcOutputPayloadKind.OverlayPassMap:
                         payload = DecodeOverlayPassMap(buffer, length, ref cursor);
+                        break;
+                    case BrowserIpcOutputPayloadKind.InputOwnershipMap:
+                        payload = DecodeInputOwnershipMap(buffer, length, ref cursor);
                         break;
                     default:
                         throw new ArgumentException($"unknown output payload kind: {(ushort)kind}");
@@ -292,6 +364,74 @@ namespace KimoTech.LichoraHost
                 id,
                 shape,
                 disabled,
+                ReadSingle(buffer, length, ref cursor),
+                ReadSingle(buffer, length, ref cursor),
+                ReadSingle(buffer, length, ref cursor),
+                ReadSingle(buffer, length, ref cursor)
+            );
+        }
+
+        private static BrowserIpcOutputPayload DecodeInputOwnershipMap(
+            byte[] buffer,
+            int length,
+            ref int cursor
+        )
+        {
+            var version = ReadUInt64(buffer, length, ref cursor);
+            var viewportWidth = ReadInt32(buffer, length, ref cursor);
+            var viewportHeight = ReadInt32(buffer, length, ref cursor);
+            var deviceScaleFactor = ReadSingle(buffer, length, ref cursor);
+            var enabled = ReadByte(buffer, length, ref cursor) != 0;
+            var defaultOwner = ReadByte(buffer, length, ref cursor);
+            Skip(buffer, length, ref cursor, 6);
+
+            var regionCount = ReadUInt32(buffer, length, ref cursor);
+            var remainingRegionCapacity = (length - cursor) / InputOwnershipRegionPayloadSize;
+            if (regionCount > (uint)remainingRegionCapacity)
+            {
+                throw new ArgumentException(
+                    $"input ownership map region count exceeds payload length: count={regionCount}, capacity={remainingRegionCapacity}"
+                );
+            }
+
+            var regions = new BrowserInputOwnershipRegionPayload[checked((int)regionCount)];
+            for (var index = 0; index < regions.Length; index++)
+            {
+                regions[index] = DecodeInputOwnershipRegion(buffer, length, ref cursor);
+            }
+
+            return new BrowserIpcOutputPayload
+            {
+                Kind = BrowserIpcOutputPayloadKind.InputOwnershipMap,
+                InputOwnershipMap = new BrowserInputOwnershipMapPayload(
+                    version,
+                    viewportWidth,
+                    viewportHeight,
+                    deviceScaleFactor,
+                    enabled,
+                    defaultOwner,
+                    regions
+                ),
+            };
+        }
+
+        private static BrowserInputOwnershipRegionPayload DecodeInputOwnershipRegion(
+            byte[] buffer,
+            int length,
+            ref int cursor
+        )
+        {
+            var id = ReadUInt32(buffer, length, ref cursor);
+            var owner = ReadByte(buffer, length, ref cursor);
+            var shape = ReadByte(buffer, length, ref cursor);
+            var disabled = ReadByte(buffer, length, ref cursor) != 0;
+            Skip(buffer, length, ref cursor, 1);
+            return new BrowserInputOwnershipRegionPayload(
+                id,
+                owner,
+                shape,
+                disabled,
+                ReadSingle(buffer, length, ref cursor),
                 ReadSingle(buffer, length, ref cursor),
                 ReadSingle(buffer, length, ref cursor),
                 ReadSingle(buffer, length, ref cursor),

@@ -4,21 +4,22 @@
 
 `docs/design/web-host-overlay.md` 已经把 Web/Host 融合主线调整为输入归属模型。旧 `PassMap` 只能表达“默认浏览器、局部穿透给宿主”，适合 Unity 小视口场景的早期验证，但不能自然表达 Unity 全屏背景、局部 Web 面板、圆角视口和 Web 工具按钮覆盖 Host 视口等场景。
 
-当前代码已经完成一轮重要重构：
+当前代码已经完成两层重构：
 
 - Unity host 已拆出 `BrowserSurface`、`BrowserFramePump`、`BrowserPageSession`、`BrowserOutputPump`、`BrowserInputController`、`BrowserFocusController` 和 `BrowserCoordinateMapper`。
 - Unity host 已建立 `InputOwnershipMap`、`InputRegion`、`InputOwnershipSettings`、`BrowserInputRouter` 和 `BrowserPointerCapture`，运行时输入查询已经以 ownership 为唯一主模型。
 - Unity host 旧 `Overlay/` pass 运行时类型已删除；当前仅在 IPC 兼容边界保留 `OverlayPassMap` 名称，并在 `Ownership/Legacy/LegacyOverlayPassMapStore` 中一次性转成动态 `InputRegion`。
-- Rust IPC 已有 `OutputPayloadKind::OverlayPassMap` typed payload。
-- `packages/overlay` 已能生成 pass map，并通过临时 console bridge 交给 Rust 转换为 typed `OverlayPassMap`。
+- Rust IPC 已有 `OutputPayloadKind::InputOwnershipMap` typed payload，旧 `OverlayPassMap` 只作为兼容 payload 保留。
+- Rust runtime 已能解析 `__LICHORA_INPUT_OWNERSHIP_MAP__:`，旧 `__LICHORA_OVERLAY_PASS_MAP__:` 只在入口转换成 ownership map 后再发布到 IPC。
+- `packages/overlay` 已以 ownership API 为主入口，能扫描 `data-lichora="host|web"`，并保留旧 `data-overlay="pass"`、`pass()`、`unpass()` 的兼容映射。
 
-这些能力证明了输入链路、IPC output、Web SDK 和 Unity raycast 协作是可行的。后续不应恢复 `PassMap` 或 `Overlay/` 目录，也不应在兼容 payload 上继续叠加默认归属、圆角和覆盖规则；新能力应进入 `InputOwnershipMap` 和后续正式 ownership payload。
+这些能力证明了输入链路、IPC output、Web SDK 和 Unity raycast 协作是可行的。后续不应恢复 `PassMap` 或 `Overlay/` 目录，也不应在兼容 payload 上继续叠加默认归属、圆角和覆盖规则；新能力应进入 `InputOwnershipMap` 主链路。
 
 ## 设计原则
 
 - 输入归属是主模型，渲染透明只是视觉策略，两者必须解耦。
 - `OverlayPassMap`、`data-overlay="pass"`、`pass()` 和 `unpass()` 只作为兼容过渡，不再承载新能力。
-- 先建立 ownership 目录和模块边界，再迁移宿主本地查询、IPC payload 和 Web SDK。
+- ownership 目录和模块边界是落地前提；后续功能必须进入这些边界，不回到 overlay/pass 命名。
 - 第一阶段只支持 `Rect` 和 `RoundedRect`，不实现 polygon、clip-path、mask、SVG path 或像素 alpha hit test。
 - 鼠标移动热路径只查询宿主本地 map，不同步调用 JS，也不读取纹理像素。
 - map 过期、非法、viewport 不匹配或 bridge 失效时默认归浏览器接收输入。
@@ -102,7 +103,7 @@ pass(element)
 
 ## 宿主适配层
 
-`PageRenderer` 继续作为 Unity 公开入口，但 overlay 相关类型不能只做原地改名。下一阶段应把“输入归属”作为独立子域建立目录，旧 pass 类型收纳到 legacy adapter。
+`PageRenderer` 继续作为 Unity 公开入口，但 overlay 相关类型不能只做原地改名。当前已经把“输入归属”作为独立子域建立目录，旧 pass 类型收纳到 legacy adapter。
 
 目标目录：
 
@@ -126,7 +127,6 @@ hosts/unity-host/Scripts/
   Ipc/
     BrowserIpcOutputPayload.cs
     BrowserOutputPump.cs
-    BrowserInputOwnershipPayload.cs
   Rendering/
     BrowserSurface.cs
     BrowserFramePump.cs
@@ -187,13 +187,13 @@ pointer capture 规则保持不变：
 
 ## IPC 迁移
 
-当前 `OverlayPassMap` 是已经落地的 typed output，继续用于兼容和回归验证。下一阶段新增或升级为 ownership payload：
+当前 `InputOwnershipMap` 是已经落地的 typed output，`OverlayPassMap` 继续用于兼容读取和回归验证：
 
 ```text
 OutputPayloadKind::InputOwnershipMap
 ```
 
-建议 payload：
+payload：
 
 ```text
 u64 version
@@ -231,11 +231,11 @@ f32 radius
 | `shape` | `1` | Rect |
 | `shape` | `2` | RoundedRect |
 
-迁移期间：
+迁移规则：
 
-- Rust 可以继续接收旧 pass map JSON，但只能在 `ownership/legacy_pass.rs` 转换一次。转换结果进入 ownership 数据结构，之后由新 payload 发布；如必须兼容旧 host，再由兼容出口生成旧 payload。
+- Rust 可以继续接收旧 pass map JSON，但只能在 `ownership/legacy_pass.rs` 转换一次。转换结果进入 ownership 数据结构，之后由新 payload 发布。
 - Unity host 通过 `LegacyOverlayPassMapStore` 把旧 `OverlayPassMap` 直接适配成 `InputOwnershipMap(defaultOwner = Web)` 下的 Host dynamic regions。
-- 新 payload 落地后，`OverlayPassMap` 只用于旧网页或旧 SDK。
+- `OverlayPassMap` 只用于旧网页或旧 SDK。
 - 宿主侧不解析网页 JSON，只消费 typed payload。
 
 Rust 侧目标结构：
@@ -245,9 +245,8 @@ src/modules/
   overlay.rs
   ownership/
     mod.rs
-    model.rs
     legacy_pass.rs
-    bridge.rs
+    map_payload.rs
 
 crates/lichora-ipc/src/
   typed_payload.rs
@@ -255,9 +254,9 @@ crates/lichora-ipc/src/
 
 职责边界：
 
-- `ownership/model.rs` 定义 runtime 内部 ownership map，不依赖 console JSON。
+- `ownership/mod.rs` 只导出 ownership 入口，不暴露旧 pass 细节。
 - `ownership/legacy_pass.rs` 是唯一允许理解旧 pass JSON 的 Rust 模块，只负责旧 pass JSON 到 ownership map 的转换。
-- `ownership/bridge.rs` 负责接收 bridge 消息、限流和诊断计数。
+- `ownership/map_payload.rs` 负责解析新 ownership console payload、限额和字段校验。
 - `typed_payload.rs` 负责 wire format，不承载 DOM 或 Unity 语义。
 
 ## Web SDK 和 Bridge
@@ -300,7 +299,7 @@ SDK 不负责：
 
 bridge 路线：
 
-- 当前 console prefix bridge 是临时方案，必须继续封装在 Rust `overlay` 模块内。
+- 当前 console prefix bridge 是临时方案；新 ownership prefix 已独立进入 Rust `ownership` 模块，旧 pass prefix 仍留在 Rust `overlay` 兼容入口。
 - 正式目标是 CEF message route 或 process message。
 - 普通 DOM bridge 事件后续走 output queue，不和 ownership map latest state 混用。
 
@@ -393,6 +392,8 @@ packages/overlay/src/
 
 目标：增加结构化 ownership payload，并保留旧 `OverlayPassMap` 兼容读取。
 
+状态：源码实现已完成，等待 Unity 内实测回归和正式 CEF message bridge 替换 console bridge。
+
 交付：
 
 - Rust IPC typed payload 增加 `InputOwnershipMap`。
@@ -411,6 +412,8 @@ packages/overlay/src/
 ### Web SDK ownership API
 
 目标：Web 端直接生成 ownership map。
+
+状态：源码实现已完成，等待接入真实业务页面实测。
 
 交付：
 
@@ -480,4 +483,9 @@ Node/SDK 修改后只使用 bun，不使用 npm、npx 或 npm lockfile。
 
 ## 下一步
 
-下一步应先做“宿主本地 ownership 模型”实施计划。该计划只改 Unity host 本地模型和 adapter，不同时改 Rust IPC 与 Web SDK。等 Unity 本地 `ResolveOwner` 稳定后，再进入 IPC ownership payload 和 Web SDK ownership API。
+当前主链路已经从本地模型推进到 Rust IPC 和 Web SDK。下一阶段不再继续扩展旧 pass 语义，按下面顺序收口：
+
+- 先由 Unity 实测确认 ownership bridge：小视口 `defaultOwner = web`、全屏背景 `defaultOwner = host`、圆角区域、按钮覆盖视口、弹窗部分遮挡和页面隐藏状态。
+- 再把 console prefix bridge 替换为正式 CEF message route 或 process message，明确 latest ownership state 与普通 output queue 的边界。
+- 然后推进 BrowserAlpha，用显式透明模式解决半透明 Web 面板和 Linear Color Space 的视觉问题。
+- 最后设置兼容窗口；旧 `OverlayPassMap`、`data-overlay="pass"` 和旧 pass API 在无业务依赖后再删除。

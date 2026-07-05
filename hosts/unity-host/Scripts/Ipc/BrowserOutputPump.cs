@@ -10,6 +10,7 @@ namespace KimoTech.LichoraHost
 
         private readonly BrowserIpcOutputReader _OutputReader;
         private readonly BrowserOutputState _OutputState;
+        private readonly BrowserInputOwnershipStore _InputOwnershipStore;
         private readonly LegacyOverlayPassMapStore _OverlayPassMapStore;
         private readonly byte[] _OutputBuffer = new byte[OutputBufferSize];
         private bool _HasLoggedInvalidOutput;
@@ -24,6 +25,7 @@ namespace KimoTech.LichoraHost
         {
             _OutputReader = outputReader ?? throw new ArgumentNullException(nameof(outputReader));
             _OutputState = new BrowserOutputState(rectTransform, width, height);
+            _InputOwnershipStore = new BrowserInputOwnershipStore(ownershipSettings);
             _OverlayPassMapStore = new LegacyOverlayPassMapStore(ownershipSettings);
         }
 
@@ -41,12 +43,12 @@ namespace KimoTech.LichoraHost
         public void Resize(int width, int height)
         {
             _OutputState.Resize(width, height);
-            _OverlayPassMapStore.Clear();
+            ClearInputOwnership();
         }
 
         public void Dispose()
         {
-            _OverlayPassMapStore.Clear();
+            ClearInputOwnership();
             _OutputReader.Dispose();
         }
 
@@ -112,7 +114,7 @@ namespace KimoTech.LichoraHost
             )
             {
                 LogInvalidOutput(error);
-                _OverlayPassMapStore.Clear();
+                ClearInputOwnership();
                 return;
             }
 
@@ -141,10 +143,19 @@ namespace KimoTech.LichoraHost
                 case BrowserIpcOutputPayloadKind.OverlayPassMap:
                     _OverlayPassMapStore.Apply(payload.OverlayPassMap);
                     break;
+                case BrowserIpcOutputPayloadKind.InputOwnershipMap:
+                    _InputOwnershipStore.Apply(payload.InputOwnershipMap);
+                    break;
                 case BrowserIpcOutputPayloadKind.ScriptResult:
                 case BrowserIpcOutputPayloadKind.PageEvent:
                     break;
             }
+        }
+
+        private void ClearInputOwnership()
+        {
+            _InputOwnershipStore.Clear();
+            _OverlayPassMapStore.Clear();
         }
 
         private void LogInvalidOutput(string message)
