@@ -300,6 +300,8 @@ SDK 不负责：
 bridge 路线：
 
 - 当前 console prefix bridge 是临时方案；新 ownership prefix 已独立进入 Rust `ownership` 模块，旧 pass prefix 仍留在 Rust `overlay` 兼容入口。
+- Rust `browser/dom_bridge.rs` 是网页消息到 typed output 的唯一分发入口；`DisplayHandler.on_console_message` 只作为当前 transport，后续 CEF message route 或 process message 也必须复用该入口。
+- Web SDK 优先发送 typed bridge 消息：`inputOwnershipMap` 和兼容的 `overlayPassMap`；console prefix 只作为 fallback transport。
 - 正式目标是 CEF message route 或 process message。
 - 普通 DOM bridge 事件后续走 output queue，不和 ownership map latest state 混用。
 
@@ -487,5 +489,6 @@ Node/SDK 修改后只使用 bun，不使用 npm、npx 或 npm lockfile。
 
 - 先由 Unity 实测确认 ownership bridge：小视口 `defaultOwner = web`、全屏背景 `defaultOwner = host`、圆角区域、按钮覆盖视口、弹窗部分遮挡和页面隐藏状态。
 - 再把 console prefix bridge 替换为正式 CEF message route 或 process message，明确 latest ownership state 与普通 output queue 的边界。
+- 正式 bridge 落地时先接 CEF browser/render process message transport，再移除 Web SDK 对 console prefix 的默认依赖；不要把新的 transport 解析逻辑写回 `DisplayHandler`。
 - 然后推进 BrowserAlpha，用显式透明模式解决半透明 Web 面板和 Linear Color Space 的视觉问题。
 - 最后设置兼容窗口；旧 `OverlayPassMap`、`data-overlay="pass"` 和旧 pass API 在无业务依赖后再删除。

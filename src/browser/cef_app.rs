@@ -4,14 +4,9 @@
 
 #[cfg(feature = "cef")]
 mod cef_impl {
+    use crate::browser::dom_bridge::handle_dom_bridge_message;
     use crate::browser::output::BrowserOutputIpcChannels;
     use crate::browser::render::OsrRenderHandler;
-    use crate::modules::{
-        input_ownership_map_from_legacy_pass_map, parse_caret_console_payload,
-        parse_input_ownership_map_console_payload, parse_overlay_pass_map_console_payload,
-        SurroundingTextPayload, INPUT_OWNERSHIP_MAP_CONSOLE_PREFIX,
-        OVERLAY_PASS_MAP_CONSOLE_PREFIX,
-    };
     use cef::*;
     use log::info;
     use std::cell::RefCell;
@@ -304,54 +299,11 @@ mod cef_impl {
                 };
                 let message = message.to_string();
 
-                if let Some(payload) = message.strip_prefix("__CARET__:") {
-                    if let Some((x, y, height)) = parse_caret_console_payload(payload) {
+                if handle_dom_bridge_message(&message, |payload| {
                         if let Ok(mut output) = self.handler.output_ipc.lock() {
-                            let _ = output.publish(ipc::OutputPayload::Caret(ipc::CaretOutput {
-                                x: i32::from(x),
-                                y: i32::from(y),
-                                width: 0,
-                                height: i32::from(height),
-                                visible: true,
-                            }));
+                            let _ = output.publish(payload);
                         }
-                    }
-                    return true as _;
-                }
-
-                if let Some(payload) = message.strip_prefix("__SURROUNDING_TEXT__:") {
-                    if let Some(snapshot) = SurroundingTextPayload::from_json(payload) {
-                        if let Ok(mut output) = self.handler.output_ipc.lock() {
-                            let _ = output.publish(ipc::OutputPayload::SurroundingText(
-                                ipc::SurroundingTextOutput {
-                                    text: snapshot.text,
-                                    selection_start: snapshot.cursor_byte_offset as i32,
-                                    selection_end: snapshot.anchor_byte_offset as i32,
-                                },
-                            ));
-                        }
-                    }
-                    return true as _;
-                }
-
-                if let Some(payload) = message.strip_prefix(INPUT_OWNERSHIP_MAP_CONSOLE_PREFIX) {
-                    if let Ok(ownership_map) = parse_input_ownership_map_console_payload(payload) {
-                        if let Ok(mut output) = self.handler.output_ipc.lock() {
-                            let _ = output
-                                .publish(ipc::OutputPayload::InputOwnershipMap(ownership_map));
-                        }
-                    }
-                    return true as _;
-                }
-
-                if let Some(payload) = message.strip_prefix(OVERLAY_PASS_MAP_CONSOLE_PREFIX) {
-                    if let Ok(pass_map) = parse_overlay_pass_map_console_payload(payload) {
-                        let ownership_map = input_ownership_map_from_legacy_pass_map(pass_map);
-                        if let Ok(mut output) = self.handler.output_ipc.lock() {
-                            let _ = output
-                                .publish(ipc::OutputPayload::InputOwnershipMap(ownership_map));
-                        }
-                    }
+                    }) {
                     return true as _;
                 }
 

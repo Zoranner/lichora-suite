@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fixturePassMap from "../fixtures/pass-map.json";
 import { disable, enable, pass, refresh, refreshPassMap, region, setDefaultOwner, unpass, unregion } from "./index";
-import { INPUT_OWNERSHIP_MAP_CONSOLE_PREFIX, OVERLAY_PASS_MAP_CONSOLE_PREFIX } from "./bridge";
+import {
+    INPUT_OWNERSHIP_MAP_BRIDGE_TYPE,
+    INPUT_OWNERSHIP_MAP_CONSOLE_PREFIX,
+    OVERLAY_PASS_MAP_BRIDGE_TYPE,
+    OVERLAY_PASS_MAP_CONSOLE_PREFIX,
+    publishPassMap,
+} from "./bridge";
 import { createInputOwnershipMap, toOwnershipPayload } from "./ownership-map";
 
 const BRIDGE_PREFIX = "__LICHORA_INPUT_OWNERSHIP_MAP__:";
@@ -154,6 +160,10 @@ class FakeWindow {
         },
     };
     public logs: string[] = [];
+    public nativeMessages: Array<{ type: string; payload: unknown }> = [];
+    public lichora?: {
+        postMessage: (type: string, payload: unknown) => void;
+    };
     private nextTimeoutId = 1;
     private timeouts = new Map<number, () => void>();
 
@@ -261,11 +271,39 @@ afterEach(() => {
 
 describe("@lichora/overlay", () => {
     test("fixture payload uses the shared console bridge contract", () => {
+        expect(INPUT_OWNERSHIP_MAP_BRIDGE_TYPE).toBe("inputOwnershipMap");
+        expect(OVERLAY_PASS_MAP_BRIDGE_TYPE).toBe("overlayPassMap");
         expect(INPUT_OWNERSHIP_MAP_CONSOLE_PREFIX).toBe(BRIDGE_PREFIX);
         expect(OVERLAY_PASS_MAP_CONSOLE_PREFIX).toBe("__LICHORA_OVERLAY_PASS_MAP__:");
         expect(JSON.stringify(fixturePassMap)).toBe(
             '{"version":"42","viewportWidth":1280,"viewportHeight":720,"deviceScaleFactor":1.25,"enabled":true,"regions":[{"id":1,"shape":"rect","x":120.5,"y":80.25,"width":640,"height":360,"disabled":false},{"id":2,"shape":"rect","x":32,"y":48,"width":128,"height":96,"disabled":true}]}',
         );
+    });
+
+    test("native bridge is preferred and console bridge remains the fallback", () => {
+        const fakeWindow = installFakeWindow();
+        fakeWindow.lichora = {
+            postMessage: (type, payload) => {
+                fakeWindow.nativeMessages.push({ type, payload });
+            },
+        };
+        const payload = toOwnershipPayload(createInputOwnershipMap(1n, true, "web", []));
+
+        enable();
+        publishPassMap(fixturePassMap);
+        expect(fakeWindow.logs).toHaveLength(0);
+        expect(fakeWindow.nativeMessages.map((message) => message.type)).toEqual([
+            INPUT_OWNERSHIP_MAP_BRIDGE_TYPE,
+            OVERLAY_PASS_MAP_BRIDGE_TYPE,
+        ]);
+        expect(fakeWindow.nativeMessages[0].payload).toEqual(payload);
+
+        fakeWindow.lichora.postMessage = () => {
+            throw new Error("native bridge unavailable");
+        };
+        refresh();
+        expect(fakeWindow.logs).toHaveLength(1);
+        expect(fakeWindow.logs[0]).toStartWith(BRIDGE_PREFIX);
     });
 
     test("scans data-overlay pass elements and API registrations into console pass maps", () => {

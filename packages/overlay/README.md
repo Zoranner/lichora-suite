@@ -132,13 +132,21 @@ Refreshes are scheduled from `MutationObserver`, `ResizeObserver`, `scroll`, and
 
 ## Current Bridge
 
-The package emits ownership maps through the temporary console bridge with this prefix:
+The package publishes ownership maps through `window.lichora.postMessage(type, payload)` when a native Lichora bridge is available.
+
+The current ownership message type is:
+
+```text
+inputOwnershipMap
+```
+
+If the native bridge is not available, the SDK falls back to the temporary console bridge with this prefix:
 
 ```text
 __LICHORA_INPUT_OWNERSHIP_MAP__:
 ```
 
-The bytes after the prefix are JSON. `version` is serialized as a string because the SDK keeps it as a monotonic bigint internally.
+The bytes after the console prefix are JSON. `version` is serialized as a string because the SDK keeps it as a monotonic bigint internally.
 
 Current ownership payload example:
 
@@ -170,6 +178,12 @@ The old compatibility prefix is still exported for legacy callers:
 
 ```text
 __LICHORA_OVERLAY_PASS_MAP__:
+```
+
+The legacy native bridge message type is:
+
+```text
+overlayPassMap
 ```
 
 `refreshPassMap()` now publishes the ownership bridge payload; legacy pass markup and APIs are converted into Host-owned regions before publishing.
