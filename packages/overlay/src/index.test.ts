@@ -25,6 +25,7 @@ class FakeElement {
     public attributes = new Map<string, string>();
     public style: Partial<CSSStyleDeclaration> = {};
     public parentElement: FakeElement | null = null;
+    public children: FakeElement[] = [];
     private rect: DOMRect;
 
     public constructor(rect: FakeRect) {
@@ -89,6 +90,19 @@ class FakeElement {
         }
 
         return false;
+    }
+
+    public appendChild(element: FakeElement): void {
+        element.parentElement = this;
+        this.children.push(element);
+    }
+
+    public querySelectorAll(selector: string): FakeElement[] {
+        if (selector !== "*") {
+            return [];
+        }
+
+        return this.children.flatMap((child) => [child, ...child.querySelectorAll(selector)]);
     }
 
     public getBoundingClientRect(): DOMRect {
@@ -406,11 +420,18 @@ describe("@lichora/overlay", () => {
     test("keeps data-lichora host element background transparent while it is host-owned", () => {
         const fakeWindow = installFakeWindow();
         const scanned = new FakeElement({ x: 10, y: 20, width: 100, height: 50 });
+        const child = new FakeElement({ x: 20, y: 30, width: 80, height: 30 });
         scanned.style.backgroundColor = "rgb(0, 128, 0)";
         scanned.style.backgroundImage = "linear-gradient(green, blue)";
         scanned.style.color = "rgb(21, 92, 61)";
         scanned.style.textShadow = "0 1px 1px black";
         scanned.style.caretColor = "auto";
+        child.style.backgroundColor = "rgba(255, 255, 255, 0.68)";
+        child.style.backgroundImage = "linear-gradient(white, green)";
+        child.style.color = "rgb(20, 100, 63)";
+        child.style.textShadow = "0 1px 1px black";
+        child.style.caretColor = "auto";
+        scanned.appendChild(child);
         scanned.setAttribute("data-lichora", "host");
         fakeWindow.document.elements.push(scanned);
 
@@ -421,6 +442,11 @@ describe("@lichora/overlay", () => {
         expect(scanned.style.color).toBe("transparent");
         expect(scanned.style.textShadow).toBe("none");
         expect(scanned.style.caretColor).toBe("transparent");
+        expect(child.style.backgroundColor).toBe("transparent");
+        expect(child.style.backgroundImage).toBe("none");
+        expect(child.style.color).toBe("transparent");
+        expect(child.style.textShadow).toBe("none");
+        expect(child.style.caretColor).toBe("transparent");
 
         scanned.setAttribute("data-lichora", "web");
         refresh();
@@ -430,6 +456,11 @@ describe("@lichora/overlay", () => {
         expect(scanned.style.color).toBe("rgb(21, 92, 61)");
         expect(scanned.style.textShadow).toBe("0 1px 1px black");
         expect(scanned.style.caretColor).toBe("auto");
+        expect(child.style.backgroundColor).toBe("rgba(255, 255, 255, 0.68)");
+        expect(child.style.backgroundImage).toBe("linear-gradient(white, green)");
+        expect(child.style.color).toBe("rgb(20, 100, 63)");
+        expect(child.style.textShadow).toBe("0 1px 1px black");
+        expect(child.style.caretColor).toBe("auto");
     });
 
     test("region registers ownership regions and unregion removes them", () => {

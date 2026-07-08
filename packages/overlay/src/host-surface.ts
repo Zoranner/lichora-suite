@@ -15,21 +15,33 @@ const TRANSPARENT_BACKGROUND_IMAGE = "none";
 const TRANSPARENT_TEXT_COLOR = "transparent";
 const TRANSPARENT_TEXT_SHADOW = "none";
 
-const styledHostElements = new Set<Element>();
+const styledSurfaceElements = new Set<Element>();
 const styleSnapshots = new WeakMap<Element, HostSurfaceStyleSnapshot>();
 
 export function syncHostSurfaceTransparency(hostElements: Iterable<Element>): void {
-    const currentHosts = new Set(hostElements);
+    const currentSurfaceElements = collectHostSurfaceElements(hostElements);
 
-    for (const element of [...styledHostElements]) {
-        if (!currentHosts.has(element)) {
+    for (const element of [...styledSurfaceElements]) {
+        if (!currentSurfaceElements.has(element)) {
             restoreHostSurface(element);
         }
     }
 
-    for (const element of currentHosts) {
+    for (const element of currentSurfaceElements) {
         applyHostSurfaceTransparency(element);
     }
+}
+
+function collectHostSurfaceElements(hostElements: Iterable<Element>): Set<Element> {
+    const surfaceElements = new Set<Element>();
+    for (const hostElement of hostElements) {
+        surfaceElements.add(hostElement);
+        for (const descendant of hostElement.querySelectorAll("*")) {
+            surfaceElements.add(descendant);
+        }
+    }
+
+    return surfaceElements;
 }
 
 function applyHostSurfaceTransparency(element: Element): void {
@@ -48,7 +60,7 @@ function applyHostSurfaceTransparency(element: Element): void {
         });
     }
 
-    styledHostElements.add(element);
+    styledSurfaceElements.add(element);
     style.backgroundColor = TRANSPARENT_BACKGROUND_COLOR;
     style.backgroundImage = TRANSPARENT_BACKGROUND_IMAGE;
     style.caretColor = TRANSPARENT_TEXT_COLOR;
@@ -59,7 +71,7 @@ function applyHostSurfaceTransparency(element: Element): void {
 function restoreHostSurface(element: Element): void {
     const style = getInlineStyle(element);
     const snapshot = styleSnapshots.get(element);
-    styledHostElements.delete(element);
+    styledSurfaceElements.delete(element);
 
     if (!style || !snapshot) {
         return;
