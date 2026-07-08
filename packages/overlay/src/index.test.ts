@@ -408,6 +408,9 @@ describe("@lichora/overlay", () => {
         const scanned = new FakeElement({ x: 10, y: 20, width: 100, height: 50 });
         scanned.style.backgroundColor = "rgb(0, 128, 0)";
         scanned.style.backgroundImage = "linear-gradient(green, blue)";
+        scanned.style.color = "rgb(21, 92, 61)";
+        scanned.style.textShadow = "0 1px 1px black";
+        scanned.style.caretColor = "auto";
         scanned.setAttribute("data-lichora", "host");
         fakeWindow.document.elements.push(scanned);
 
@@ -415,12 +418,18 @@ describe("@lichora/overlay", () => {
 
         expect(scanned.style.backgroundColor).toBe("transparent");
         expect(scanned.style.backgroundImage).toBe("none");
+        expect(scanned.style.color).toBe("transparent");
+        expect(scanned.style.textShadow).toBe("none");
+        expect(scanned.style.caretColor).toBe("transparent");
 
         scanned.setAttribute("data-lichora", "web");
         refresh();
 
         expect(scanned.style.backgroundColor).toBe("rgb(0, 128, 0)");
         expect(scanned.style.backgroundImage).toBe("linear-gradient(green, blue)");
+        expect(scanned.style.color).toBe("rgb(21, 92, 61)");
+        expect(scanned.style.textShadow).toBe("0 1px 1px black");
+        expect(scanned.style.caretColor).toBe("auto");
     });
 
     test("region registers ownership regions and unregion removes them", () => {

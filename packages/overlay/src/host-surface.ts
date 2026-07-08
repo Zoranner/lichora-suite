@@ -5,10 +5,15 @@ interface StyledElement extends Element {
 interface HostSurfaceStyleSnapshot {
     backgroundColor: string;
     backgroundImage: string;
+    caretColor: string;
+    color: string;
+    textShadow: string;
 }
 
 const TRANSPARENT_BACKGROUND_COLOR = "transparent";
 const TRANSPARENT_BACKGROUND_IMAGE = "none";
+const TRANSPARENT_TEXT_COLOR = "transparent";
+const TRANSPARENT_TEXT_SHADOW = "none";
 
 const styledHostElements = new Set<Element>();
 const styleSnapshots = new WeakMap<Element, HostSurfaceStyleSnapshot>();
@@ -37,12 +42,18 @@ function applyHostSurfaceTransparency(element: Element): void {
         styleSnapshots.set(element, {
             backgroundColor: style.backgroundColor,
             backgroundImage: style.backgroundImage,
+            caretColor: style.caretColor,
+            color: style.color,
+            textShadow: style.textShadow,
         });
     }
 
     styledHostElements.add(element);
     style.backgroundColor = TRANSPARENT_BACKGROUND_COLOR;
     style.backgroundImage = TRANSPARENT_BACKGROUND_IMAGE;
+    style.caretColor = TRANSPARENT_TEXT_COLOR;
+    style.color = TRANSPARENT_TEXT_COLOR;
+    style.textShadow = TRANSPARENT_TEXT_SHADOW;
 }
 
 function restoreHostSurface(element: Element): void {
@@ -56,6 +67,9 @@ function restoreHostSurface(element: Element): void {
 
     style.backgroundColor = snapshot.backgroundColor;
     style.backgroundImage = snapshot.backgroundImage;
+    style.caretColor = snapshot.caretColor;
+    style.color = snapshot.color;
+    style.textShadow = snapshot.textShadow;
     styleSnapshots.delete(element);
 }
 
