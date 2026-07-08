@@ -12,7 +12,7 @@ pub struct CaptureModule {
     frame_sequence: u64,
     width: i32,
     height: i32,
-    opaque_frame_buffer: Vec<u8>,
+    frame_buffer: Vec<u8>,
 }
 
 impl CaptureModule {
@@ -28,7 +28,7 @@ impl CaptureModule {
             frame_sequence: 0,
             width,
             height,
-            opaque_frame_buffer: Vec::new(),
+            frame_buffer: Vec::new(),
         })
     }
 
@@ -51,11 +51,8 @@ impl CaptureModule {
         );
 
         self.frame_sequence = self.frame_sequence.saturating_add(1);
-        self.opaque_frame_buffer.clear();
-        self.opaque_frame_buffer.extend_from_slice(pixels);
-        for pixel in self.opaque_frame_buffer.chunks_exact_mut(BYTES_PER_PIXEL) {
-            pixel[3] = u8::MAX;
-        }
+        self.frame_buffer.clear();
+        self.frame_buffer.extend_from_slice(pixels);
 
         let published = self
             .frame_channel
@@ -63,7 +60,7 @@ impl CaptureModule {
                 self.frame_sequence,
                 width as u32,
                 height as u32,
-                &self.opaque_frame_buffer,
+                &self.frame_buffer,
             )?
             .published();
         if published {
@@ -98,9 +95,17 @@ fn ipc_directory() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::CaptureModule;
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_lock() -> &'static Mutex<()> {
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn publishes_frame_channel_without_legacy_capture_file() {
+        let _guard = env_lock().lock().unwrap();
         let temp = tempfile::tempdir().unwrap();
         std::env::set_var("EBI_IPC_DIR", temp.path());
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -126,7 +131,8 @@ mod tests {
     }
 
     #[test]
-    fn publishes_browser_frames_as_opaque_bgra() {
+    fn preserves_browser_frame_alpha() {
+        let _guard = env_lock().lock().unwrap();
         let temp = tempfile::tempdir().unwrap();
         std::env::set_var("EBI_IPC_DIR", temp.path());
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -144,7 +150,7 @@ mod tests {
         let mut buffer = vec![0u8; pixels.len()];
         reader.try_copy_latest(&mut buffer).unwrap();
 
-        assert_eq!(vec![10u8, 20, 30, 255, 40, 50, 60, 255], buffer);
+        assert_eq!(pixels, buffer);
         std::env::remove_var("EBI_IPC_DIR");
     }
 }

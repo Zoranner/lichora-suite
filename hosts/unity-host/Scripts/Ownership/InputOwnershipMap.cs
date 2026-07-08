@@ -28,59 +28,182 @@ namespace KimoTech.LichoraHost
         private InputRegion[] _StaticRegions = Array.Empty<InputRegion>();
 
         private InputRegion[] _DynamicRegions = Array.Empty<InputRegion>();
+        private ulong _Revision;
+
+        public ulong Revision => _Revision;
 
         public ulong Version
         {
             get => _Version;
-            set => _Version = value;
+            set
+            {
+                if (_Version == value)
+                {
+                    return;
+                }
+
+                _Version = value;
+                IncrementRevision();
+            }
         }
 
         public bool Enabled
         {
             get => _Enabled;
-            set => _Enabled = value;
+            set
+            {
+                if (_Enabled == value)
+                {
+                    return;
+                }
+
+                _Enabled = value;
+                IncrementRevision();
+            }
         }
 
         public int ViewportWidth
         {
             get => _ViewportWidth;
-            set => _ViewportWidth = value;
+            set
+            {
+                if (_ViewportWidth == value)
+                {
+                    return;
+                }
+
+                _ViewportWidth = value;
+                IncrementRevision();
+            }
         }
 
         public int ViewportHeight
         {
             get => _ViewportHeight;
-            set => _ViewportHeight = value;
+            set
+            {
+                if (_ViewportHeight == value)
+                {
+                    return;
+                }
+
+                _ViewportHeight = value;
+                IncrementRevision();
+            }
         }
 
         public float DeviceScaleFactor
         {
             get => _DeviceScaleFactor;
-            set => _DeviceScaleFactor = value;
+            set
+            {
+                if (Mathf.Approximately(_DeviceScaleFactor, value))
+                {
+                    return;
+                }
+
+                _DeviceScaleFactor = value;
+                IncrementRevision();
+            }
         }
 
         public InputOwner DefaultOwner
         {
             get => IsValidOwner(_DefaultOwner) ? _DefaultOwner : InputOwner.Web;
-            set => _DefaultOwner = IsValidOwner(value) ? value : InputOwner.Web;
+            set
+            {
+                var owner = IsValidOwner(value) ? value : InputOwner.Web;
+                if (_DefaultOwner == owner)
+                {
+                    return;
+                }
+
+                _DefaultOwner = owner;
+                IncrementRevision();
+            }
         }
 
         public InputRegion[] StaticRegions
         {
-            get => _StaticRegions;
-            set => _StaticRegions = value ?? Array.Empty<InputRegion>();
+            get => CopyRegions(_StaticRegions);
+            set
+            {
+                _StaticRegions = CopyRegions(value);
+                IncrementRevision();
+            }
         }
 
         public int DynamicRegionCount => _DynamicRegions?.Length ?? 0;
 
+        public bool HasHostVisibleRegion =>
+            IsValidMap
+            && (
+                DefaultOwner == InputOwner.Host
+                || HasRegionOwnedBy(_StaticRegions, InputOwner.Host)
+                || HasRegionOwnedBy(_DynamicRegions, InputOwner.Host)
+            );
+
+        public bool HasWebVisibleRegion =>
+            IsValidMap
+            && (
+                DefaultOwner == InputOwner.Web
+                || HasRegionOwnedBy(_StaticRegions, InputOwner.Web)
+                || HasRegionOwnedBy(_DynamicRegions, InputOwner.Web)
+            );
+
         public void SetDynamicRegions(InputRegion[] regions)
         {
-            _DynamicRegions = regions ?? Array.Empty<InputRegion>();
+            _DynamicRegions = CopyRegions(regions);
+            IncrementRevision();
         }
 
         public void ClearDynamicRegions()
         {
+            if (_DynamicRegions == null || _DynamicRegions.Length == 0)
+            {
+                return;
+            }
+
             _DynamicRegions = Array.Empty<InputRegion>();
+            IncrementRevision();
+        }
+
+        public void ResetDynamicOwnership()
+        {
+            var changed =
+                _Version != 0
+                || !_Enabled
+                || _ViewportWidth != 0
+                || _ViewportHeight != 0
+                || !Mathf.Approximately(_DeviceScaleFactor, 1f)
+                || _DefaultOwner != InputOwner.Web
+                || (_DynamicRegions != null && _DynamicRegions.Length > 0);
+
+            _Version = 0;
+            _Enabled = true;
+            _ViewportWidth = 0;
+            _ViewportHeight = 0;
+            _DeviceScaleFactor = 1f;
+            _DefaultOwner = InputOwner.Web;
+            _DynamicRegions = Array.Empty<InputRegion>();
+
+            if (changed)
+            {
+                IncrementRevision();
+            }
+        }
+
+        internal InputOwnershipRenderSnapshot CreateRenderSnapshot()
+        {
+            return new InputOwnershipRenderSnapshot(
+                _Revision,
+                _Enabled,
+                DefaultOwner,
+                HasHostVisibleRegion,
+                HasWebVisibleRegion,
+                _StaticRegions ?? Array.Empty<InputRegion>(),
+                _DynamicRegions ?? Array.Empty<InputRegion>()
+            );
         }
 
         public InputOwner ResolveOwner(Vector2 normalizedPosition)
@@ -105,6 +228,11 @@ namespace KimoTech.LichoraHost
 
         private bool IsValidMap => _Enabled && IsValidOwner(_DefaultOwner);
 
+        private void IncrementRevision()
+        {
+            _Revision++;
+        }
+
         private static bool TryResolveOwner(
             InputRegion[] regions,
             Vector2 normalizedPosition,
@@ -128,6 +256,36 @@ namespace KimoTech.LichoraHost
 
                 owner = region.Owner;
                 return true;
+            }
+
+            return false;
+        }
+
+        private static InputRegion[] CopyRegions(InputRegion[] regions)
+        {
+            if (regions == null || regions.Length == 0)
+            {
+                return Array.Empty<InputRegion>();
+            }
+
+            var copy = new InputRegion[regions.Length];
+            Array.Copy(regions, copy, regions.Length);
+            return copy;
+        }
+
+        private static bool HasRegionOwnedBy(InputRegion[] regions, InputOwner owner)
+        {
+            if (regions == null || regions.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (var region in regions)
+            {
+                if (region.IsValid && region.Owner == owner)
+                {
+                    return true;
+                }
             }
 
             return false;

@@ -30,6 +30,16 @@ namespace KimoTech.LichoraHost
             OwnershipMap.ClearDynamicRegions();
         }
 
+        public void ResetDynamicOwnership()
+        {
+            OwnershipMap.ResetDynamicOwnership();
+        }
+
+        internal InputOwnershipRenderSnapshot CreateRenderSnapshot()
+        {
+            return OwnershipMap.CreateRenderSnapshot();
+        }
+
         public InputOwner ResolveOwner(Vector2 normalizedPosition)
         {
             return OwnershipMap.ResolveOwner(normalizedPosition);

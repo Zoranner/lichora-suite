@@ -466,10 +466,7 @@ impl BrowserEntry {
             ..Default::default()
         };
 
-        let browser_settings = BrowserSettings {
-            windowless_frame_rate: self.config.frame_rate,
-            ..Default::default()
-        };
+        let browser_settings = windowless_browser_settings(self.config.frame_rate);
 
         let url = CefString::from(self.config.url.as_str());
         let output_ipc = self
@@ -671,6 +668,28 @@ impl BrowserEntry {
         }
         ScriptModule::execute_script(browser, CARET_PROBE_SCRIPT);
         ScriptModule::execute_script(browser, SURROUNDING_TEXT_PROBE_SCRIPT);
+    }
+}
+
+#[cfg(feature = "cef")]
+fn windowless_browser_settings(frame_rate: i32) -> BrowserSettings {
+    BrowserSettings {
+        windowless_frame_rate: frame_rate,
+        background_color: 0x00000000,
+        ..Default::default()
+    }
+}
+
+#[cfg(all(test, feature = "cef"))]
+mod cef_tests {
+    use super::windowless_browser_settings;
+
+    #[test]
+    fn windowless_browser_settings_enable_transparent_painting() {
+        let settings = windowless_browser_settings(30);
+
+        assert_eq!(30, settings.windowless_frame_rate);
+        assert_eq!(0x00000000, settings.background_color);
     }
 }
 

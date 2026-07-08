@@ -11,6 +11,7 @@ namespace KimoTech.LichoraHost
             Color filterColor,
             float colorThreshold,
             bool flipY,
+            bool useOwnershipMask,
             string materialResourcePath
         )
         {
@@ -18,6 +19,7 @@ namespace KimoTech.LichoraHost
             FilterColor = filterColor;
             ColorThreshold = colorThreshold;
             FlipY = flipY;
+            UseOwnershipMask = useOwnershipMask;
             MaterialResourcePath = string.IsNullOrWhiteSpace(materialResourcePath)
                 ? DefaultMaterialResourcePath
                 : materialResourcePath;
@@ -27,6 +29,7 @@ namespace KimoTech.LichoraHost
         public Color FilterColor { get; }
         public float ColorThreshold { get; }
         public bool FlipY { get; }
+        public bool UseOwnershipMask { get; }
         public string MaterialResourcePath { get; }
 
         public static BrowserRenderSettings OpaqueDefault =>
@@ -34,6 +37,7 @@ namespace KimoTech.LichoraHost
                 BrowserTransparencyMode.Opaque,
                 Color.white,
                 0f,
+                true,
                 true,
                 DefaultMaterialResourcePath
             );
@@ -44,6 +48,7 @@ namespace KimoTech.LichoraHost
                 filteredColor ? BrowserTransparencyMode.ColorKey : BrowserTransparencyMode.Opaque,
                 Color.white,
                 filteredColor ? 1f : 0f,
+                true,
                 true,
                 DefaultMaterialResourcePath
             );

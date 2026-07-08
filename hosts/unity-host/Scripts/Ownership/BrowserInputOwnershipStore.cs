@@ -38,7 +38,7 @@ namespace KimoTech.LichoraHost
         public void Clear()
         {
             var dynamicRegionCount = _OwnershipSettings?.OwnershipMap?.DynamicRegionCount ?? 0;
-            _OwnershipSettings?.ClearDynamicRegions();
+            _OwnershipSettings?.ResetDynamicOwnership();
             if (dynamicRegionCount > 0)
             {
                 Debug.Log("[BrowserInputOwnershipStore] Cleared input ownership map.");
