@@ -21,12 +21,17 @@ interface FakeRect {
 }
 
 class FakeElement {
+    public readonly nodeType = 1;
     public attributes = new Map<string, string>();
     public style: Partial<CSSStyleDeclaration> = {};
     public parentElement: FakeElement | null = null;
     private rect: DOMRect;
 
     public constructor(rect: FakeRect) {
+        this.setRect(rect);
+    }
+
+    public setRect(rect: FakeRect): void {
         this.rect = {
             x: rect.x ?? 0,
             y: rect.y ?? 0,
@@ -108,7 +113,7 @@ class FakeDocument {
 class FakeMutationObserver {
     public static instances: FakeMutationObserver[] = [];
 
-    public constructor(private readonly callback: () => void) {
+    public constructor(private readonly callback: (records: MutationRecord[]) => void) {
         FakeMutationObserver.instances.push(this);
     }
 
@@ -116,8 +121,8 @@ class FakeMutationObserver {
 
     public disconnect(): void {}
 
-    public trigger(): void {
-        this.callback();
+    public trigger(records: MutationRecord[] = [attributeMutation("data-lichora")]): void {
+        this.callback(records);
     }
 }
 
@@ -247,6 +252,32 @@ function latestPayload(fakeWindow: FakeWindow) {
 
 function containsPoint(rect: DOMRect, x: number, y: number): boolean {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
+function attributeMutation(attributeName: string): MutationRecord {
+    return {
+        type: "attributes",
+        attributeName,
+        addedNodes: nodeList([]),
+        removedNodes: nodeList([]),
+    } as MutationRecord;
+}
+
+function childListMutation(addedNodes: Node[] = [], removedNodes: Node[] = []): MutationRecord {
+    return {
+        type: "childList",
+        attributeName: null,
+        addedNodes: nodeList(addedNodes),
+        removedNodes: nodeList(removedNodes),
+    } as MutationRecord;
+}
+
+function nodeList(nodes: Node[]): NodeList {
+    return {
+        length: nodes.length,
+        item: (index: number) => nodes[index] ?? null,
+        ...nodes,
+    } as unknown as NodeList;
 }
 
 beforeEach(() => {
@@ -606,6 +637,7 @@ describe("@lichora/overlay", () => {
 
         enable();
         fakeWindow.logs = [];
+        element.setRect({ width: 24, height: 20 });
         FakeMutationObserver.instances[0]?.trigger();
         FakeResizeObserver.instances[0]?.trigger();
         fakeWindow.dispatch("scroll");
@@ -615,5 +647,48 @@ describe("@lichora/overlay", () => {
         fakeWindow.flushTimers();
         expect(fakeWindow.logs).toHaveLength(1);
         expect(latestPayload(fakeWindow).regions).toHaveLength(1);
+    });
+
+    test("mutation observer ignores text-only child changes", () => {
+        const fakeWindow = installFakeWindow();
+        const element = new FakeElement({ width: 20, height: 20 });
+        fakeWindow.document.elements.push(element);
+        element.setAttribute("data-lichora", "host");
+
+        enable();
+        fakeWindow.logs = [];
+        FakeMutationObserver.instances[0]?.trigger([childListMutation([{ nodeType: 3 } as Node])]);
+        fakeWindow.flushTimers();
+
+        expect(fakeWindow.logs).toHaveLength(0);
+
+        const addedElement = new FakeElement({ x: 30, y: 0, width: 5, height: 5 });
+        addedElement.setAttribute("data-lichora", "host");
+        fakeWindow.document.elements.push(addedElement);
+        FakeMutationObserver.instances[0]?.trigger([childListMutation([addedElement as Node])]);
+        fakeWindow.flushTimers();
+
+        expect(fakeWindow.logs).toHaveLength(1);
+    });
+
+    test("scheduled refresh skips unchanged ownership payloads", () => {
+        const fakeWindow = installFakeWindow();
+        const element = new FakeElement({ width: 20, height: 20 });
+        fakeWindow.document.elements.push(element);
+        element.setAttribute("data-lichora", "host");
+
+        enable();
+        fakeWindow.logs = [];
+
+        FakeMutationObserver.instances[0]?.trigger();
+        fakeWindow.flushTimers();
+        expect(fakeWindow.logs).toHaveLength(0);
+
+        element.setRect({ width: 24, height: 20 });
+        FakeResizeObserver.instances[0]?.trigger();
+        fakeWindow.flushTimers();
+
+        expect(fakeWindow.logs).toHaveLength(1);
+        expect(latestPayload(fakeWindow).regions[0].width).toBe(24);
     });
 });

@@ -35,16 +35,7 @@ namespace KimoTech.LichoraHost
         public ulong Version
         {
             get => _Version;
-            set
-            {
-                if (_Version == value)
-                {
-                    return;
-                }
-
-                _Version = value;
-                IncrementRevision();
-            }
+            set => _Version = value;
         }
 
         public bool Enabled
@@ -65,46 +56,19 @@ namespace KimoTech.LichoraHost
         public int ViewportWidth
         {
             get => _ViewportWidth;
-            set
-            {
-                if (_ViewportWidth == value)
-                {
-                    return;
-                }
-
-                _ViewportWidth = value;
-                IncrementRevision();
-            }
+            set => _ViewportWidth = value;
         }
 
         public int ViewportHeight
         {
             get => _ViewportHeight;
-            set
-            {
-                if (_ViewportHeight == value)
-                {
-                    return;
-                }
-
-                _ViewportHeight = value;
-                IncrementRevision();
-            }
+            set => _ViewportHeight = value;
         }
 
         public float DeviceScaleFactor
         {
             get => _DeviceScaleFactor;
-            set
-            {
-                if (Mathf.Approximately(_DeviceScaleFactor, value))
-                {
-                    return;
-                }
-
-                _DeviceScaleFactor = value;
-                IncrementRevision();
-            }
+            set => _DeviceScaleFactor = value;
         }
 
         public InputOwner DefaultOwner
@@ -153,7 +117,13 @@ namespace KimoTech.LichoraHost
 
         public void SetDynamicRegions(InputRegion[] regions)
         {
-            _DynamicRegions = CopyRegions(regions);
+            var nextRegions = CopyRegions(regions);
+            if (RegionsEqual(_DynamicRegions, nextRegions))
+            {
+                return;
+            }
+
+            _DynamicRegions = nextRegions;
             IncrementRevision();
         }
 
@@ -171,11 +141,7 @@ namespace KimoTech.LichoraHost
         public void ResetDynamicOwnership()
         {
             var changed =
-                _Version != 0
-                || !_Enabled
-                || _ViewportWidth != 0
-                || _ViewportHeight != 0
-                || !Mathf.Approximately(_DeviceScaleFactor, 1f)
+                !_Enabled
                 || _DefaultOwner != InputOwner.Web
                 || (_DynamicRegions != null && _DynamicRegions.Length > 0);
 
@@ -271,6 +237,42 @@ namespace KimoTech.LichoraHost
             var copy = new InputRegion[regions.Length];
             Array.Copy(regions, copy, regions.Length);
             return copy;
+        }
+
+        private static bool RegionsEqual(InputRegion[] left, InputRegion[] right)
+        {
+            if (left == null || left.Length == 0)
+            {
+                return right == null || right.Length == 0;
+            }
+
+            if (right == null || left.Length != right.Length)
+            {
+                return false;
+            }
+
+            for (var index = 0; index < left.Length; index++)
+            {
+                if (!RegionEquals(left[index], right[index]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool RegionEquals(InputRegion left, InputRegion right)
+        {
+            return left.Id == right.Id
+                && left.Owner == right.Owner
+                && left.Shape == right.Shape
+                && Mathf.Approximately(left.Rect.x, right.Rect.x)
+                && Mathf.Approximately(left.Rect.y, right.Rect.y)
+                && Mathf.Approximately(left.Rect.width, right.Rect.width)
+                && Mathf.Approximately(left.Rect.height, right.Rect.height)
+                && Mathf.Approximately(left.Radius, right.Radius)
+                && left.Disabled == right.Disabled;
         }
 
         private static bool HasRegionOwnedBy(InputRegion[] regions, InputOwner owner)

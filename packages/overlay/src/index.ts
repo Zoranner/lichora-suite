@@ -36,6 +36,7 @@ let enabled = false;
 let defaultOwner: InputOwner = "web";
 let version = 0n;
 let scheduledRefresh: ReturnType<typeof setTimeout> | undefined;
+let lastPublishedSignature: string | undefined;
 
 export function setDefaultOwner(owner: InputOwner): void {
     defaultOwner = owner;
@@ -68,12 +69,27 @@ export function unpass(element: Element): void {
 }
 
 export function refresh(): void {
+    refreshNow(false);
+}
+
+function refreshScheduled(): void {
+    refreshNow(true);
+}
+
+function refreshNow(skipUnchanged: boolean): void {
     clearScheduledRefresh();
-    version += 1n;
     const registrations = collectRegistrations();
     observers?.observe(registrations.map((registration) => registration.element));
 
-    const ownershipMap = createInputOwnershipMap(version, enabled, defaultOwner, registrations);
+    const ownershipMap = createInputOwnershipMap(version + 1n, enabled, defaultOwner, registrations);
+    const signature = createOwnershipSignature(ownershipMap);
+    if (skipUnchanged && signature === lastPublishedSignature) {
+        return;
+    }
+
+    version += 1n;
+    ownershipMap.version = version;
+    lastPublishedSignature = signature;
     publishOwnershipMap(ownershipMap);
 }
 
@@ -108,6 +124,18 @@ function publishOwnershipMap(ownershipMap: InputOwnershipMap): void {
     publishInputOwnershipMap(toOwnershipPayload(ownershipMap));
 }
 
+function createOwnershipSignature(ownershipMap: InputOwnershipMap): string {
+    const payload = toOwnershipPayload(ownershipMap);
+    return JSON.stringify({
+        viewportWidth: payload.viewportWidth,
+        viewportHeight: payload.viewportHeight,
+        deviceScaleFactor: payload.deviceScaleFactor,
+        enabled: payload.enabled,
+        defaultOwner: payload.defaultOwner,
+        regions: payload.regions,
+    });
+}
+
 function ensureObservers(): void {
     if (observers) {
         return;
@@ -132,7 +160,7 @@ function scheduleRefresh(): void {
 
     const currentWindow = globalThis.window;
     const setTimer = currentWindow?.setTimeout?.bind(currentWindow) ?? globalThis.setTimeout.bind(globalThis);
-    scheduledRefresh = setTimer(refresh, REFRESH_THROTTLE_MS);
+    scheduledRefresh = setTimer(refreshScheduled, REFRESH_THROTTLE_MS);
 }
 
 function clearScheduledRefresh(): void {

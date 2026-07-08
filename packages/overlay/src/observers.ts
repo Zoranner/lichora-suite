@@ -1,5 +1,16 @@
 export type RefreshScheduler = () => void;
 
+const OWNERSHIP_ATTRIBUTES = [
+    "data-lichora",
+    "data-lichora-disabled",
+    "data-overlay",
+    "style",
+    "class",
+    "hidden",
+    "disabled",
+];
+const ELEMENT_NODE_TYPE = 1;
+
 export class OverlayObservers {
     private mutationObserver?: MutationObserver;
     private resizeObserver?: ResizeObserver;
@@ -14,18 +25,14 @@ export class OverlayObservers {
 
         const currentDocument = globalThis.document;
         if (currentDocument && globalThis.MutationObserver) {
-            this.mutationObserver = new MutationObserver(() => this.scheduleRefresh());
+            this.mutationObserver = new MutationObserver((records) => {
+                if (records.some(shouldRefreshForMutation)) {
+                    this.scheduleRefresh();
+                }
+            });
             this.mutationObserver.observe(currentDocument, {
                 attributes: true,
-                attributeFilter: [
-                    "data-lichora",
-                    "data-lichora-disabled",
-                    "data-overlay",
-                    "style",
-                    "class",
-                    "hidden",
-                    "disabled",
-                ],
+                attributeFilter: OWNERSHIP_ATTRIBUTES,
                 childList: true,
                 subtree: true,
             });
@@ -81,4 +88,26 @@ export class OverlayObservers {
         this.resizeListener = undefined;
         this.observedElements.clear();
     }
+}
+
+function shouldRefreshForMutation(record: MutationRecord): boolean {
+    if (record.type === "attributes") {
+        return !!record.attributeName && OWNERSHIP_ATTRIBUTES.includes(record.attributeName);
+    }
+
+    if (record.type !== "childList") {
+        return false;
+    }
+
+    return hasElementNode(record.addedNodes) || hasElementNode(record.removedNodes);
+}
+
+function hasElementNode(nodes: NodeList): boolean {
+    for (var index = 0; index < nodes.length; index++) {
+        if (nodes[index]?.nodeType === ELEMENT_NODE_TYPE) {
+            return true;
+        }
+    }
+
+    return false;
 }
