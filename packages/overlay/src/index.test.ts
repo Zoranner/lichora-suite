@@ -403,6 +403,26 @@ describe("@lichora/overlay", () => {
         ]);
     });
 
+    test("keeps data-lichora host element background transparent while it is host-owned", () => {
+        const fakeWindow = installFakeWindow();
+        const scanned = new FakeElement({ x: 10, y: 20, width: 100, height: 50 });
+        scanned.style.backgroundColor = "rgb(0, 128, 0)";
+        scanned.style.backgroundImage = "linear-gradient(green, blue)";
+        scanned.setAttribute("data-lichora", "host");
+        fakeWindow.document.elements.push(scanned);
+
+        enable();
+
+        expect(scanned.style.backgroundColor).toBe("transparent");
+        expect(scanned.style.backgroundImage).toBe("none");
+
+        scanned.setAttribute("data-lichora", "web");
+        refresh();
+
+        expect(scanned.style.backgroundColor).toBe("rgb(0, 128, 0)");
+        expect(scanned.style.backgroundImage).toBe("linear-gradient(green, blue)");
+    });
+
     test("region registers ownership regions and unregion removes them", () => {
         const fakeWindow = installFakeWindow();
         const element = new FakeElement({ x: 30, y: 40, width: 120, height: 60 });
