@@ -423,10 +423,14 @@ impl BrowserEntry {
         {
             let mut app = AppBuilder::build(HeadlessApp::new(self.config.gpu_enabled));
             let args = cef::args::Args::new();
+            let cache_path = cache_path(&self.session_id);
+            let log_file = cef_log_file(&cache_path);
             let settings = Settings {
                 windowless_rendering_enabled: true as _,
                 external_message_pump: false as _,
-                cache_path: CefString::from(cache_path().as_str()),
+                cache_path: CefString::from(cache_path.as_str()),
+                root_cache_path: CefString::from(cache_path.as_str()),
+                log_file: CefString::from(log_file.as_str()),
                 multi_threaded_message_loop: false as _,
                 ..Default::default()
             };
@@ -1017,15 +1021,44 @@ fn should_update_caret_position(windows_key_code: i32, modifiers: u32) -> bool {
     false
 }
 
-fn cache_path() -> String {
+fn cache_path(session_id: &str) -> String {
     let base = std::env::var("LOCALAPPDATA")
         .or_else(|_| std::env::var("HOME").map(|home| format!("{home}/.local/share")))
         .unwrap_or_else(|_| ".".to_string());
-    let path = std::path::Path::new(&base).join("Lichora").join("Cache");
+    let path = std::path::Path::new(&base)
+        .join("Lichora")
+        .join("Cache")
+        .join(sanitize_cache_name(session_id));
     if let Err(error) = std::fs::create_dir_all(&path) {
         warn!("Failed to create cache directory: {error}");
     }
     path.to_string_lossy().into_owned()
+}
+
+fn cef_log_file(cache_path: &str) -> String {
+    std::path::Path::new(cache_path)
+        .join("chrome_debug.log")
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn sanitize_cache_name(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    if sanitized.is_empty() {
+        "default".to_string()
+    } else {
+        sanitized
+    }
 }
 
 impl Default for BrowserEntry {
@@ -1065,7 +1098,7 @@ pub fn shutdown_browser_runtime() {}
 
 #[cfg(test)]
 mod tests {
-    use super::browser_input_ipc_spec;
+    use super::{browser_input_ipc_spec, cef_log_file, sanitize_cache_name};
 
     #[test]
     fn browser_input_ipc_spec_matches_ipc_native_names_and_layout() {
@@ -1075,5 +1108,19 @@ mod tests {
 
         assert_eq!(native_latest, spec.latest);
         assert_eq!(native_queue, spec.queue);
+    }
+
+    #[test]
+    fn sanitize_cache_name_keeps_path_segment_safe() {
+        assert_eq!("handler-42_A", sanitize_cache_name("handler-42_A"));
+        assert_eq!("bad_name___", sanitize_cache_name("bad/name:*?"));
+        assert_eq!("default", sanitize_cache_name(""));
+    }
+
+    #[test]
+    fn cef_log_file_lives_under_cache_path() {
+        let log_file = cef_log_file(r"C:\Users\example\AppData\Local\Lichora\Cache\handler");
+
+        assert!(log_file.ends_with(r"Lichora\Cache\handler\chrome_debug.log"));
     }
 }
