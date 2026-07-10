@@ -5,7 +5,10 @@
     "description": "Web-side pass map SDK boundary for Lichora controlled overlays.",
     "type": "module",
     "scripts": {
-        "test": "bun test"
+        "test": "bun test",
+        "typecheck": "tsc --noEmit",
+        "check-package": "bun scripts/check-package.mjs",
+        "check": "bun test && bun run typecheck && bun run check-package"
     },
     "exports": {
         ".": "./src/index.ts"

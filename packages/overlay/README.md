@@ -208,4 +208,9 @@ Use bun only:
 
 ```powershell
 bun test
+bun run typecheck
+bun run check-package
+bun run check
 ```
+
+`bun run check` is the package quality entry point. It runs the test suite, strict TypeScript checking, and the package export/file contract check without starting a browser or Unity Editor.
