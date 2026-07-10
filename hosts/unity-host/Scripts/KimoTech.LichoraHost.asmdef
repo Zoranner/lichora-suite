@@ -1,18 +1,21 @@
 {
-    "name": "KimoTech.LichoraHost",
-    "rootNamespace": "KimoTech.LichoraHost",
-    "references": [
-        "GUID:3dcbb65762ae01440b7e7f4a08bf32bd",
-        "GUID:f51ebe6a0ceec4240a699833d6309b23",
-        "GUID:af4a6eaf80948fd4da1e88d4200952a1"
-    ],
-    "includePlatforms": [],
-    "excludePlatforms": [],
-    "allowUnsafeCode": true,
-    "overrideReferences": false,
-    "precompiledReferences": [],
-    "autoReferenced": true,
-    "defineConstraints": [],
-    "versionDefines": [],
-    "noEngineReferences": false
+  "name": "KimoTech.LichoraHost",
+  "rootNamespace": "KimoTech.LichoraHost",
+  "references": [
+    "GUID:de12ede6e1df4045bfd70d0df70eb4f7",
+    "GUID:8c5bb370d71d41e0a0090d6505ab2207",
+    "GUID:e3fab1b92aa3476a81401895bb67b34b",
+    "GUID:3dcbb65762ae01440b7e7f4a08bf32bd",
+    "GUID:f51ebe6a0ceec4240a699833d6309b23",
+    "GUID:af4a6eaf80948fd4da1e88d4200952a1"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
 }

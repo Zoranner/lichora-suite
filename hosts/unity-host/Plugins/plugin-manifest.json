@@ -1,0 +1,59 @@
+{
+    "schemaVersion": 1,
+    "package": {
+        "name": "com.kimotech.lichora-host",
+        "version": "0.1.0"
+    },
+    "plugins": [
+        {
+            "name": "lichora_ipc_native-windows",
+            "path": "Plugins/Windows/lichora_ipc_native.dll",
+            "platform": "Windows",
+            "architecture": "x86_64",
+            "dllImport": "lichora_ipc_native",
+            "release": true,
+            "sourceCrate": "lichora-ipc-native",
+            "abiVersion": 2
+        },
+        {
+            "name": "process_host-windows",
+            "path": "Plugins/Windows/process_host.dll",
+            "platform": "Windows",
+            "architecture": "x86_64",
+            "dllImport": "process_host",
+            "release": true,
+            "sourceCrate": "process-host",
+            "abiVersion": null
+        },
+        {
+            "name": "process_host-linux",
+            "path": "Plugins/Linux/libprocess_host.so",
+            "platform": "Linux",
+            "architecture": "x86_64",
+            "dllImport": "process_host",
+            "release": true,
+            "sourceCrate": "process-host",
+            "abiVersion": null
+        },
+        {
+            "name": "native_ime-linux",
+            "path": "Plugins/Linux/libnative_ime.so",
+            "platform": "Linux",
+            "architecture": "x86_64",
+            "dllImport": "native_ime",
+            "release": true,
+            "sourceCrate": "native-ime",
+            "abiVersion": null
+        },
+        {
+            "name": "lichora_ipc_native-linux",
+            "path": "Plugins/Linux/liblichora_ipc_native.so",
+            "platform": "Linux",
+            "architecture": "x86_64",
+            "dllImport": "lichora_ipc_native",
+            "release": false,
+            "sourceCrate": "lichora-ipc-native",
+            "abiVersion": 2
+        }
+    ]
+}
