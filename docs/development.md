@@ -73,13 +73,18 @@ dist/linux-x64/
 
 ## 模块边界
 
-- `src/main.rs`：CLI、handler loop 和 Unity 管理命令分发；旧 heartbeat 启动参数不再支持。
+- `src/main.rs`：进程入口、CEF 子进程分流、日志初始化和运行模式组合；旧 heartbeat 启动参数不再支持。
+- `src/cli.rs`：CLI 参数模型、graphics mode 解析、handler GUID/URL 模式识别和 usage 输出。
+- `src/handler.rs`：Unity handler loop、control queue、浏览器实例编排、控制命令分发和 handler 运行日志。
 - `src/browser/`：CEF app/client、浏览器实例生命周期、OSR render handler。
 - `src/modules/`：浏览器输入、输出和 capture 的业务适配层。
 - `src/ipc/`：IPC v2 runtime 适配层。
 - `crates/lichora-ipc/`：共享 IPC core，包括 mmap、header、queue、latest slot、frame ring、typed payload 和 status/output payload。
 - `crates/lichora-ipc-native/`：宿主原生插件 C ABI；typed browser handle 是输入、帧和输出热路径的唯一接口，旧 `*_for_browser` session-handle 导出不再保留。
 - `crates/process-host/`：宿主进程管理 C ABI，供 Unity IL2CPP 等无法稳定使用托管 `Process` 的环境调用。
+- `hosts/unity-host/Scripts/Native/`：Unity 原生桥接程序集，集中承载公开 IPC/process/IME facade，以及内部 C# P/Invoke、raw handle、错误映射、输入 payload 编码和 native event buffer；Runtime 不接触底层原生实现类型。
+- `hosts/unity-host/Scripts/Protocol/`：无 Unity/Native 引用的浏览器输出 payload 解码与 DTO；只由 Runtime 显式引用，Native 不依赖 Protocol。
+- `hosts/unity-host/Scripts/Model/`：无 Unity/Native 引用的 ownership 基础枚举程序集，只承载 `InputOwner` 和 `InputRegionShape`；Unity 序列化和坐标相关的 `InputRegion`、`InputOwnershipMap`、render snapshot 仍属于 Runtime。
 
 文档和发布治理改动不应顺手修改 `src`。协议行为变更必须同时更新 `docs/protocol.md`、`crates/lichora-ipc` tests 和相关 `docs/design` 文档。
 
@@ -96,3 +101,25 @@ Capture 走 `FrameRing`，鼠标移动走 latest-only，事件走 SPSC queue。W
 按仓库约束，不能通过 Unity Editor、Unity batchmode、Unity Test Framework batchmode、BuildPipeline、`dotnet build` 或 Unity 生成的 `.sln/.csproj` 验证。
 
 Rust 代码变更通常需要 `cargo fmt --all` 和 `cargo clippy --all-targets --all-features -- -D warnings`。仅文档和发布治理改动可用文本扫描、脚本审查和 diff 检查收口。
+
+仓库级质量检查入口为：
+
+```powershell
+.\scripts\check-quality.ps1
+```
+
+该脚本统一执行 Rust、overlay、Unity C# 和插件契约检查；Unity 部分只进行源码与配置静态检查，不启动 Unity Editor，不执行 Unity batchmode、BuildPipeline 或 Unity 生成项目编译。
+
+当前架构依据以根目录 `README.md`、本文档、`protocol.md` 和 `design/` 下的设计文档为准。`archive/` 下的材料只用于历史追溯。
+
+## 仓库质量检查入口
+
+从仓库根目录执行：
+
+```powershell
+.\scripts\check-quality.ps1
+```
+
+默认检查顺序为 Rust `cargo fmt --all -- --check`、Rust `cargo clippy --all-targets --all-features -- -D warnings`、overlay 的 Bun `test`、`typecheck`、`check-package`，以及 Unity C# 的 CSharpier。Unity C# 文件从 `hosts/unity-host` Package 根递归收集，因此 Runtime、Editor、Samples 和未跟踪的新源码都会进入检查；该 Package 目录不包含 Unity `Library` 等宿主工程生成目录。脚本最后执行 `scripts/check-plugin-contract.ps1`。
+
+脚本支持 `-SkipRust`、`-SkipOverlay`、`-SkipUnity` 和 `-SkipPackaging`。任何阶段失败都会立即退出，并输出失败阶段。该入口不启动 Unity Editor，不执行 Unity batchmode、Unity Test Framework batchmode、BuildPipeline、`dotnet build`、`msbuild` 或 Unity 生成项目编译。

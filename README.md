@@ -131,3 +131,17 @@ Unity 侧启动 handler 进程时，第一个非选项参数是 handler GUID：
 - [Development](docs/development.md)
 - [Protocol](docs/protocol.md)
 - [Web/Host Overlay Design](docs/design/web-host-overlay.md)
+- [Engineering Reviews](docs/reviews/)
+- [Historical Archive](docs/archive/aggregate-workspace/README.md)（仅供历史追溯，不作为当前架构依据）
+
+## 仓库质量检查
+
+提交前可从仓库根目录运行统一质量入口：
+
+```powershell
+.\scripts\check-quality.ps1
+```
+
+该入口依次检查 Rust `fmt`/`clippy`、`packages/overlay` 的 Bun `test`/`typecheck`/`check-package`，并递归收集 `hosts/unity-host` Package 中现存的 C# 源码执行 `csharpier check`，包括 Runtime、Editor、Samples 和尚未跟踪的新文件。入口最后调用 `scripts/check-plugin-contract.ps1` 检查 Unity 程序集和插件静态契约。
+
+可使用 `-SkipRust`、`-SkipOverlay`、`-SkipUnity` 或 `-SkipPackaging` 跳过对应阶段。Unity 阶段只读取包内源码，不启动 Unity Editor、batchmode、BuildPipeline，也不执行 Unity 生成的 `.sln`/`.csproj` 编译。

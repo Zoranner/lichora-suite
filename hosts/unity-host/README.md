@@ -25,6 +25,19 @@ dist/win-x64/lichora.exe
 ```
 
 Set `BrowserConfig.json` in the application directory to point at that executable.
+Browser output payload decoding is isolated under `Scripts/Protocol` in the Unity-free, dependency-free `KimoTech.LichoraHost.Protocol` assembly. Runtime references Protocol explicitly. Native owns input payload encoding and does not reference Protocol.
+
+The ownership enum model is isolated under `Scripts/Model` in the Unity-free `KimoTech.LichoraHost.Model` assembly. It contains only `InputOwner` and `InputRegionShape`; Unity-backed `InputRegion`, `InputOwnershipMap` and render snapshots remain in Runtime because they depend on Unity serialization and coordinate types.
+
+The C# native boundary is isolated under `Scripts/Native` in the `KimoTech.LichoraHost.Native` assembly. Runtime consumes public IPC, process and IME facades; raw handles, result mapping, P/Invoke declarations and native event buffers remain internal to Native. Runtime disables unsafe code, and `Scripts/Native` is the only supported C# P/Invoke location.
+
+Plugin support and ABI metadata are recorded in `Plugins/plugin-manifest.json`. The manifest describes the target platform, architecture, P/Invoke name, source crate, ABI version and whether the plugin is part of the current release surface. Run the repository plugin contract check after changing native plugin files or importer settings:
+
+```powershell
+.\scripts\check-plugin-contract.ps1
+```
+
+The manifest does not contain binary hashes. Release automation is responsible for generating and publishing checksums for the exact native binaries included in a release.
 
 ## Linux Status
 
