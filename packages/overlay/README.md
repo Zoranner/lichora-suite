@@ -192,7 +192,21 @@ overlayPassMap
 
 ## Example Page
 
-`examples/pass-map.html` is a self-contained browser example for the current ownership bridge. In the Unity BrowserRenderer project, the same test page is copied to:
+`examples/pass-map.html` is a generated, self-contained browser example for the current ownership bridge. It contains the bundled overlay runtime and does not require TypeScript loading or a development server.
+
+Regenerate it after changing the overlay runtime or example entry:
+
+```powershell
+bun run build:example
+```
+
+The same generator can update an existing Unity BrowserRenderer test page in place while preserving its HTML and CSS:
+
+```powershell
+bun run build:example E:\Repositories\unity\BrowserRenderer\BrowserAssets\demo\overlay-pass-map.html
+```
+
+The Unity test page remains at:
 
 ```text
 BrowserAssets/demo/overlay-pass-map.html

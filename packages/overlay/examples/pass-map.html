@@ -93,46 +93,686 @@
     <div id="log" class="log"></div>
   </section>
 
-  <script type="module">
-    import { disable, enable, refresh } from "../src/index.ts";
-
-    const log = document.getElementById("log");
-    const hostZone = document.getElementById("host-zone");
-    const originalLog = console.log.bind(console);
-    let compact = false;
-    let passEnabled = true;
-
-    console.log = (...args) => {
-      originalLog(...args);
-      const message = String(args[0] ?? "");
-      if (message.startsWith("__LICHORA_INPUT_OWNERSHIP_MAP__:")) {
-        log.textContent = JSON.stringify(
-          JSON.parse(message.slice("__LICHORA_INPUT_OWNERSHIP_MAP__:".length)),
-          null,
-          2,
-        );
+  <!-- LICHORA_OVERLAY_BUNDLE_START -->
+  <script>
+    (() => {
+      // src/bridge.ts
+      var INPUT_OWNERSHIP_MAP_BRIDGE_TYPE = "inputOwnershipMap";
+      var INPUT_OWNERSHIP_MAP_CONSOLE_PREFIX = "__LICHORA_INPUT_OWNERSHIP_MAP__:";
+      function publishInputOwnershipMap(payload) {
+        if (postNativeBridgeMessage(INPUT_OWNERSHIP_MAP_BRIDGE_TYPE, payload)) {
+          return;
+        }
+        const targetConsole = globalThis.window?.console ?? globalThis.console;
+        targetConsole.log(`${INPUT_OWNERSHIP_MAP_CONSOLE_PREFIX}${JSON.stringify(payload)}`);
       }
-    };
-
-    document.getElementById("toggle-pass").addEventListener("click", (event) => {
-      passEnabled = !passEnabled;
-      if (passEnabled) {
-        enable();
-      } else {
-        disable();
+      function postNativeBridgeMessage(type, payload) {
+        const bridge = globalThis.window?.lichora;
+        if (typeof bridge?.postMessage !== "function") {
+          return false;
+        }
+        try {
+          bridge.postMessage(type, payload);
+          return true;
+        } catch {
+          return false;
+        }
       }
-      event.currentTarget.textContent = passEnabled ? "禁用穿透区域" : "启用穿透区域";
-    });
 
-    document.getElementById("resize-pass").addEventListener("click", () => {
-      compact = !compact;
-      hostZone.style.margin = compact ? "60px 90px" : "0";
-      refresh();
-    });
+      // src/browser-alpha-mask.ts
+      var MASK_ID = "lichora-ownership-mask";
+      var MASK_PROPERTIES = [
+        "mask-image",
+        "mask-repeat",
+        "mask-position",
+        "mask-size",
+        "mask-mode",
+        "-webkit-mask-image",
+        "-webkit-mask-repeat",
+        "-webkit-mask-position",
+        "-webkit-mask-size",
+        "-webkit-mask-source-type"
+      ];
+      var inlineMaskSnapshot;
+      function syncBrowserAlphaMask(ownershipMap) {
+        if (!ownershipMap.enabled) {
+          restoreBrowserAlphaMask();
+          return;
+        }
+        const style = globalThis.document?.documentElement?.style;
+        if (!style) {
+          return;
+        }
+        if (inlineMaskSnapshot?.style !== style) {
+          restoreBrowserAlphaMask();
+        }
+        inlineMaskSnapshot ??= {
+          style,
+          values: MASK_PROPERTIES.map((name) => ({
+            name,
+            value: style.getPropertyValue(name),
+            priority: style.getPropertyPriority(name)
+          }))
+        };
+        const maskImage = `url("data:image/svg+xml,${encodeURIComponent(createBrowserAlphaMaskSvg(ownershipMap))}")`;
+        setMaskProperty(style, "mask-image", maskImage);
+        setMaskProperty(style, "mask-repeat", "no-repeat");
+        const maskPosition = `${globalThis.window?.scrollX ?? 0}px ${globalThis.window?.scrollY ?? 0}px`;
+        const maskSize = `${ownershipMap.viewportWidth}px ${ownershipMap.viewportHeight}px`;
+        setMaskProperty(style, "mask-position", maskPosition);
+        setMaskProperty(style, "mask-size", maskSize);
+        setMaskProperty(style, "mask-mode", "alpha");
+        setMaskProperty(style, "-webkit-mask-image", maskImage);
+        setMaskProperty(style, "-webkit-mask-repeat", "no-repeat");
+        setMaskProperty(style, "-webkit-mask-position", maskPosition);
+        setMaskProperty(style, "-webkit-mask-size", maskSize);
+        setMaskProperty(style, "-webkit-mask-source-type", "alpha");
+      }
+      function restoreBrowserAlphaMask() {
+        if (!inlineMaskSnapshot) {
+          return;
+        }
+        const { style, values } = inlineMaskSnapshot;
+        for (const { name, value, priority } of values) {
+          if (value) {
+            style.setProperty(name, value, priority);
+          } else {
+            style.removeProperty(name);
+          }
+        }
+        inlineMaskSnapshot = undefined;
+      }
+      function createBrowserAlphaMaskSvg(ownershipMap) {
+        const width = ownershipMap.viewportWidth;
+        const height = ownershipMap.viewportHeight;
+        const baseFill = ownerFill(ownershipMap.defaultOwner);
+        const regions = ownershipMap.regions.map(createRegionElement).join("");
+        return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` + `<mask id="${MASK_ID}" maskUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}" mask-type="luminance">` + `<rect width="${width}" height="${height}" fill="${baseFill}"/>${regions}</mask>` + `<rect width="${width}" height="${height}" fill="white" mask="url(#${MASK_ID})"/>` + "</svg>";
+      }
+      function createRegionElement(region) {
+        if (region.disabled || region.width <= 0 || region.height <= 0) {
+          return "";
+        }
+        const roundedAttributes = region.shape === "roundedRect" && region.radius > 0 ? ` rx="${region.radius}" ry="${region.radius}"` : "";
+        return `<rect x="${region.x}" y="${region.y}" width="${region.width}" height="${region.height}"${roundedAttributes} fill="${ownerFill(region.owner)}"/>`;
+      }
+      function ownerFill(owner) {
+        return owner === "web" ? "white" : "black";
+      }
+      function setMaskProperty(style, name, value) {
+        style.setProperty(name, value);
+      }
 
-    document.getElementById("refresh").addEventListener("click", refresh);
+      // src/observers.ts
+      var OWNERSHIP_ATTRIBUTES = [
+        "data-lichora",
+        "data-lichora-disabled",
+        "data-overlay",
+        "style",
+        "class",
+        "hidden",
+        "disabled"
+      ];
+      var ELEMENT_NODE_TYPE = 1;
 
-    enable();
+      class OverlayObservers {
+        scheduleRefresh;
+        mutationObserver;
+        resizeObserver;
+        observedElements = new Set;
+        scrollListener;
+        resizeListener;
+        constructor(scheduleRefresh) {
+          this.scheduleRefresh = scheduleRefresh;
+        }
+        start(elements) {
+          this.stop();
+          const currentDocument = globalThis.document;
+          if (currentDocument && globalThis.MutationObserver) {
+            this.mutationObserver = new MutationObserver((records) => {
+              if (records.some(shouldRefreshForMutation)) {
+                this.scheduleRefresh();
+              }
+            });
+            this.mutationObserver.observe(currentDocument, {
+              attributes: true,
+              attributeFilter: OWNERSHIP_ATTRIBUTES,
+              childList: true,
+              subtree: true
+            });
+          }
+          if (globalThis.ResizeObserver) {
+            this.resizeObserver = new ResizeObserver(() => this.scheduleRefresh());
+            this.observe(elements);
+          }
+          this.scrollListener = () => this.scheduleRefresh();
+          this.resizeListener = () => this.scheduleRefresh();
+          globalThis.window?.addEventListener("scroll", this.scrollListener, true);
+          globalThis.window?.addEventListener("resize", this.resizeListener);
+        }
+        observe(elements) {
+          if (!this.resizeObserver) {
+            return;
+          }
+          for (const element of elements) {
+            if (this.observedElements.has(element)) {
+              continue;
+            }
+            this.observedElements.add(element);
+            this.resizeObserver.observe(element);
+          }
+        }
+        unobserve(element) {
+          if (!this.observedElements.delete(element)) {
+            return;
+          }
+          this.resizeObserver?.unobserve(element);
+        }
+        stop() {
+          this.mutationObserver?.disconnect();
+          this.resizeObserver?.disconnect();
+          if (this.scrollListener) {
+            globalThis.window?.removeEventListener("scroll", this.scrollListener, true);
+          }
+          if (this.resizeListener) {
+            globalThis.window?.removeEventListener("resize", this.resizeListener);
+          }
+          this.mutationObserver = undefined;
+          this.resizeObserver = undefined;
+          this.scrollListener = undefined;
+          this.resizeListener = undefined;
+          this.observedElements.clear();
+        }
+      }
+      function shouldRefreshForMutation(record) {
+        if (record.type === "attributes") {
+          return !!record.attributeName && OWNERSHIP_ATTRIBUTES.includes(record.attributeName);
+        }
+        if (record.type !== "childList") {
+          return false;
+        }
+        return hasElementNode(record.addedNodes) || hasElementNode(record.removedNodes);
+      }
+      function hasElementNode(nodes) {
+        for (var index = 0;index < nodes.length; index++) {
+          if (nodes[index]?.nodeType === ELEMENT_NODE_TYPE) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      // src/dom-scan.ts
+      function scanOwnershipAttributeRegistrations() {
+        const currentDocument = globalThis.document;
+        if (!currentDocument?.querySelectorAll) {
+          return [];
+        }
+        return [...currentDocument.querySelectorAll('[data-lichora="host"], [data-lichora="web"]')].map((element) => toOwnershipRegistration(element)).filter((registration) => registration !== null);
+      }
+      function toOwnershipRegistration(element) {
+        const owner = parseOwner(element.getAttribute("data-lichora"));
+        if (!owner) {
+          return null;
+        }
+        return {
+          element,
+          owner,
+          options: readRegionOptions(element)
+        };
+      }
+      function readRegionOptions(element) {
+        return {
+          disabled: element.getAttribute("data-lichora-disabled") === "true"
+        };
+      }
+      function parseOwner(value) {
+        return value === "host" || value === "web" ? value : null;
+      }
+
+      // src/legacy-pass.ts
+      function scanLegacyPassAttributeRegistrations() {
+        const currentDocument = globalThis.document;
+        if (!currentDocument?.querySelectorAll) {
+          return [];
+        }
+        return [...currentDocument.querySelectorAll('[data-overlay="pass"]')].map((element) => ({
+          element,
+          owner: "host",
+          options: {}
+        }));
+      }
+      function createLegacyPassApi(registerHostRegion) {
+        return (element, options = {}) => registerHostRegion(element, options);
+      }
+
+      // src/shape.ts
+      function getElementRegionShape(element) {
+        const style = globalThis.getComputedStyle?.(element);
+        const radius = readBorderRadius(style);
+        return {
+          shape: radius > 0 ? "roundedRect" : "rect",
+          radius
+        };
+      }
+      function toRectLike(rect) {
+        return {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height
+        };
+      }
+      function intersectRects(left, right) {
+        const x = Math.max(left.x, right.x);
+        const y = Math.max(left.y, right.y);
+        const rightEdge = Math.min(left.x + left.width, right.x + right.width);
+        const bottomEdge = Math.min(left.y + left.height, right.y + right.height);
+        return toValidRect(x, y, rightEdge - x, bottomEdge - y);
+      }
+      function subtractRects(source, occluders) {
+        let remaining = [source];
+        for (const occluder of occluders) {
+          remaining = remaining.flatMap((rect) => subtractRect(rect, occluder));
+        }
+        return remaining;
+      }
+      function sampleRectPoints(rect) {
+        const x1 = rect.x + 0.5;
+        const x2 = rect.x + rect.width / 2;
+        const x3 = rect.x + rect.width - 0.5;
+        const y1 = rect.y + 0.5;
+        const y2 = rect.y + rect.height / 2;
+        const y3 = rect.y + rect.height - 0.5;
+        return [
+          { x: x1, y: y1 },
+          { x: x2, y: y1 },
+          { x: x3, y: y1 },
+          { x: x1, y: y2 },
+          { x: x2, y: y2 },
+          { x: x3, y: y2 },
+          { x: x1, y: y3 },
+          { x: x2, y: y3 },
+          { x: x3, y: y3 }
+        ];
+      }
+      function subtractRect(source, occluder) {
+        const intersection = intersectRects(source, occluder);
+        if (!intersection) {
+          return [source];
+        }
+        return [
+          toValidRect(source.x, source.y, source.width, intersection.y - source.y),
+          toValidRect(source.x, intersection.y + intersection.height, source.width, source.y + source.height - intersection.y - intersection.height),
+          toValidRect(source.x, intersection.y, intersection.x - source.x, intersection.height),
+          toValidRect(intersection.x + intersection.width, intersection.y, source.x + source.width - intersection.x - intersection.width, intersection.height)
+        ].filter((rect) => rect !== null);
+      }
+      function toValidRect(x, y, width, height) {
+        if (width <= 0 || height <= 0) {
+          return null;
+        }
+        return { x, y, width, height };
+      }
+      function readBorderRadius(style) {
+        if (!style) {
+          return 0;
+        }
+        const radius = readCssPixels(style.borderRadius);
+        const cornerRadii = [
+          readCssPixels(style.borderTopLeftRadius),
+          readCssPixels(style.borderTopRightRadius),
+          readCssPixels(style.borderBottomRightRadius),
+          readCssPixels(style.borderBottomLeftRadius)
+        ].filter((cornerRadius) => cornerRadius > 0);
+        if (cornerRadii.length > 0) {
+          return Math.min(...cornerRadii);
+        }
+        return radius;
+      }
+      function readCssPixels(value) {
+        if (!value) {
+          return 0;
+        }
+        const firstValue = value.trim().split(/\s+/)[0];
+        if (!firstValue.endsWith("px")) {
+          return 0;
+        }
+        const parsed = Number(firstValue.slice(0, -2));
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+      }
+
+      // src/visibility.ts
+      function isUsableElement(element, options) {
+        if (options.disabled) {
+          return false;
+        }
+        if (element.hasAttribute("hidden")) {
+          return false;
+        }
+        if (element.hasAttribute("disabled") || element.disabled === true) {
+          return false;
+        }
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) {
+          return false;
+        }
+        return isVisibleElement(element);
+      }
+      function isVisibleElement(element) {
+        if (element.hasAttribute("hidden")) {
+          return false;
+        }
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) {
+          return false;
+        }
+        const style = globalThis.getComputedStyle?.(element);
+        if (style?.display === "none" || style?.visibility === "hidden" || style?.visibility === "collapse") {
+          return false;
+        }
+        if (style?.opacity !== undefined && Number(style.opacity) <= 0) {
+          return false;
+        }
+        return true;
+      }
+
+      // src/ownership-map.ts
+      var MAX_INPUT_REGIONS = 256;
+      function createInputOwnershipMap(version, enabled, defaultOwner, registrations) {
+        return {
+          version,
+          viewportWidth: getViewportWidth(),
+          viewportHeight: getViewportHeight(),
+          deviceScaleFactor: getDeviceScaleFactor(),
+          enabled,
+          defaultOwner,
+          regions: enabled ? collectRegions(defaultOwner, registrations) : []
+        };
+      }
+      function toOwnershipPayload(ownershipMap) {
+        return {
+          version: ownershipMap.version.toString(),
+          viewportWidth: ownershipMap.viewportWidth,
+          viewportHeight: ownershipMap.viewportHeight,
+          deviceScaleFactor: ownershipMap.deviceScaleFactor,
+          enabled: ownershipMap.enabled,
+          defaultOwner: ownershipMap.defaultOwner,
+          regions: ownershipMap.regions
+        };
+      }
+      function collectRegions(defaultOwner, registrations) {
+        const regions = [];
+        const orderedRegistrations = dedupeRegistrations(registrations);
+        const ownerByElement = new Map(orderedRegistrations.map((registration) => [registration.element, registration.owner]));
+        for (const registration of orderedRegistrations) {
+          if (regions.length >= MAX_INPUT_REGIONS || registration.owner === defaultOwner || !isUsableElement(registration.element, registration.options)) {
+            continue;
+          }
+          const elementShape = getElementRegionShape(registration.element);
+          for (const rect of getVisibleRegionRects(registration, defaultOwner, ownerByElement)) {
+            if (regions.length >= MAX_INPUT_REGIONS) {
+              break;
+            }
+            regions.push({
+              id: regions.length + 1,
+              owner: registration.owner,
+              shape: elementShape.shape,
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+              radius: elementShape.radius,
+              disabled: false
+            });
+          }
+        }
+        return regions;
+      }
+      function dedupeRegistrations(registrations) {
+        const deduped = [];
+        const seen = new Set;
+        for (const registration of registrations) {
+          if (seen.has(registration.element)) {
+            continue;
+          }
+          seen.add(registration.element);
+          deduped.push(registration);
+        }
+        return deduped;
+      }
+      function getVisibleRegionRects(registration, defaultOwner, ownerByElement) {
+        const rect = toRectLike(registration.element.getBoundingClientRect());
+        return subtractRects(rect, getCoveringRects(registration, rect, defaultOwner, ownerByElement));
+      }
+      function getCoveringRects(registration, rect, defaultOwner, ownerByElement) {
+        const currentDocument = globalThis.document;
+        if (!currentDocument?.elementsFromPoint) {
+          return [];
+        }
+        const occluders = [];
+        const seen = new Set;
+        for (const point of sampleRectPoints(rect)) {
+          for (const stackedElement of currentDocument.elementsFromPoint(point.x, point.y)) {
+            if (stackedElement === registration.element) {
+              break;
+            }
+            if (seen.has(stackedElement) || !isVisibleElement(stackedElement)) {
+              continue;
+            }
+            if (registration.element.contains(stackedElement) || stackedElement.contains(registration.element)) {
+              continue;
+            }
+            const stackedOwner = resolveStackedOwner(stackedElement, defaultOwner, ownerByElement);
+            if (stackedOwner === registration.owner) {
+              continue;
+            }
+            const occluder = intersectRects(rect, toRectLike(stackedElement.getBoundingClientRect()));
+            if (occluder) {
+              seen.add(stackedElement);
+              occluders.push(occluder);
+            }
+          }
+        }
+        return occluders;
+      }
+      function resolveStackedOwner(element, defaultOwner, ownerByElement) {
+        return ownerByElement.get(element) ?? defaultOwner;
+      }
+      function getViewportWidth() {
+        return globalThis.window?.innerWidth ?? 0;
+      }
+      function getViewportHeight() {
+        return globalThis.window?.innerHeight ?? 0;
+      }
+      function getDeviceScaleFactor() {
+        return globalThis.window?.devicePixelRatio || 1;
+      }
+
+      // src/region-registry.ts
+      class RegionRegistry {
+        registrations = new Map;
+        set(element, owner, options) {
+          this.registrations.set(element, {
+            element,
+            owner,
+            options: { ...options }
+          });
+        }
+        delete(element) {
+          return this.registrations.delete(element);
+        }
+        values() {
+          return [...this.registrations.values()];
+        }
+      }
+
+      // src/index.ts
+      var REFRESH_THROTTLE_MS = 50;
+      var regionRegistry = new RegionRegistry;
+      var observers;
+      var enabled = false;
+      var defaultOwner = "web";
+      var version = 0n;
+      var scheduledRefresh;
+      var lastPublishedSignature;
+      function region(element, owner, options = {}) {
+        regionRegistry.set(element, owner, options);
+        observers?.observe([element]);
+        scheduleRefresh();
+        return () => unregion(element);
+      }
+      function unregion(element) {
+        if (!regionRegistry.delete(element)) {
+          return;
+        }
+        observers?.unobserve(element);
+        scheduleRefresh();
+      }
+      var pass = createLegacyPassApi((element, options = {}) => region(element, "host", options));
+      function refresh() {
+        refreshNow(false);
+      }
+      function refreshScheduled() {
+        refreshNow(true);
+      }
+      function refreshNow(skipUnchanged) {
+        clearScheduledRefresh();
+        const registrations = collectRegistrations();
+        observers?.observe(registrations.map((registration) => registration.element));
+        const ownershipMap = createInputOwnershipMap(version + 1n, enabled, defaultOwner, registrations);
+        const signature = createOwnershipSignature(ownershipMap);
+        if (skipUnchanged && signature === lastPublishedSignature) {
+          return;
+        }
+        version += 1n;
+        ownershipMap.version = version;
+        lastPublishedSignature = signature;
+        publishOwnershipMap(ownershipMap);
+      }
+      function enable() {
+        if (enabled) {
+          return;
+        }
+        enabled = true;
+        ensureObservers();
+        refresh();
+      }
+      function disable() {
+        if (!enabled && !observers) {
+          clearScheduledRefresh();
+          return;
+        }
+        enabled = false;
+        observers?.stop();
+        observers = undefined;
+        clearScheduledRefresh();
+        refresh();
+      }
+      function publishOwnershipMap(ownershipMap) {
+        syncBrowserAlphaMask(ownershipMap);
+        publishInputOwnershipMap(toOwnershipPayload(ownershipMap));
+      }
+      function createOwnershipSignature(ownershipMap) {
+        const payload = toOwnershipPayload(ownershipMap);
+        return JSON.stringify({
+          viewportWidth: payload.viewportWidth,
+          viewportHeight: payload.viewportHeight,
+          deviceScaleFactor: payload.deviceScaleFactor,
+          enabled: payload.enabled,
+          defaultOwner: payload.defaultOwner,
+          regions: payload.regions
+        });
+      }
+      function ensureObservers() {
+        if (observers) {
+          return;
+        }
+        observers = new OverlayObservers(scheduleRefresh);
+        observers.start(collectRegistrations().map((registration) => registration.element));
+      }
+      function collectRegistrations() {
+        return [
+          ...regionRegistry.values(),
+          ...scanOwnershipAttributeRegistrations(),
+          ...scanLegacyPassAttributeRegistrations()
+        ];
+      }
+      function scheduleRefresh() {
+        if (!enabled || scheduledRefresh !== undefined) {
+          return;
+        }
+        const currentWindow = globalThis.window;
+        const setTimer = currentWindow?.setTimeout?.bind(currentWindow) ?? globalThis.setTimeout.bind(globalThis);
+        scheduledRefresh = setTimer(refreshScheduled, REFRESH_THROTTLE_MS);
+      }
+      function clearScheduledRefresh() {
+        if (scheduledRefresh === undefined) {
+          return;
+        }
+        const currentWindow = globalThis.window;
+        const clearTimer = currentWindow?.clearTimeout?.bind(currentWindow) ?? globalThis.clearTimeout.bind(globalThis);
+        clearTimer(scheduledRefresh);
+        scheduledRefresh = undefined;
+      }
+
+      // examples/pass-map-entry.ts
+      var BRIDGE_PREFIX = "__LICHORA_INPUT_OWNERSHIP_MAP__:";
+      var hostZone = document.getElementById("host-zone");
+      var log = document.getElementById("log");
+      var summary = document.getElementById("summary");
+      var dialog = document.getElementById("dialog");
+      var toggleHost = document.getElementById("toggle-host") ?? document.getElementById("toggle-pass");
+      var resizeHost = document.getElementById("resize-host") ?? document.getElementById("resize-pass");
+      var enabled2 = true;
+      var compact = false;
+      var originalLog = console.log.bind(console);
+      console.log = (...args) => {
+        originalLog(...args);
+        const message = String(args[0] ?? "");
+        if (!message.startsWith(BRIDGE_PREFIX)) {
+          return;
+        }
+        const payload = JSON.parse(message.slice(BRIDGE_PREFIX.length));
+        if (summary) {
+          summary.textContent = `version=${payload.version}, enabled=${payload.enabled}, regions=${payload.regions.length}`;
+        }
+        if (log) {
+          log.textContent = JSON.stringify(payload, null, 2);
+        }
+      };
+      toggleHost?.addEventListener("click", () => {
+        enabled2 = !enabled2;
+        if (enabled2) {
+          enable();
+        } else {
+          disable();
+        }
+        toggleHost.textContent = enabled2 ? "禁用中间 Host 区域" : "启用中间 Host 区域";
+      });
+      document.getElementById("toggle-dialog")?.addEventListener("click", () => {
+        if (dialog) {
+          dialog.hidden = !dialog.hidden;
+          refresh();
+        }
+      });
+      document.getElementById("close-dialog")?.addEventListener("click", () => {
+        if (dialog) {
+          dialog.hidden = true;
+          refresh();
+        }
+      });
+      resizeHost?.addEventListener("click", () => {
+        compact = !compact;
+        if (hostZone) {
+          hostZone.style.margin = compact ? "64px 96px" : "0";
+        }
+        refresh();
+      });
+      document.getElementById("refresh")?.addEventListener("click", refresh);
+      enable();
+    })();
   </script>
+  <!-- LICHORA_OVERLAY_BUNDLE_END -->
 </body>
 </html>

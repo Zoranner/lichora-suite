@@ -5,6 +5,7 @@
     "description": "Web-side input ownership SDK for Lichora controlled overlays.",
     "type": "module",
     "scripts": {
+        "build:example": "bun scripts/build-example.ts",
         "test": "bun test",
         "typecheck": "tsc --noEmit",
         "check-package": "bun scripts/check-package.mjs",

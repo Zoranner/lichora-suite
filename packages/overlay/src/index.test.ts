@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import fixturePassMap from "../fixtures/pass-map.json";
+import { buildExample } from "../scripts/build-example";
 import { disable, enable, pass, refresh, refreshPassMap, region, setDefaultOwner, unpass, unregion } from "./index";
 import {
     INPUT_OWNERSHIP_MAP_BRIDGE_TYPE,
@@ -348,6 +353,26 @@ afterEach(() => {
 });
 
 describe("@lichora/overlay", () => {
+    test("ships the example as a self-contained Chromium alpha page", async () => {
+        const exampleUrl = new URL("../examples/pass-map.html", import.meta.url);
+        const html = await readFile(exampleUrl, "utf8");
+
+        expect(html).not.toMatch(/<script[^>]+\bsrc=/i);
+        expect(html).not.toContain("../src/index.ts");
+        expect(html).not.toMatch(/\bimport\s*\{/);
+        expect(html).toContain('mask-type="luminance"');
+        expect(html).toContain('data-lichora="host"');
+
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "lichora-overlay-example-"));
+        const generatedPath = join(temporaryDirectory, "pass-map.html");
+        try {
+            await buildExample({ templatePath: fileURLToPath(exampleUrl), outputPath: generatedPath });
+            expect(await readFile(generatedPath, "utf8")).toBe(html);
+        } finally {
+            await rm(temporaryDirectory, { recursive: true, force: true });
+        }
+    });
+
     test("fixture payload uses the shared console bridge contract", () => {
         expect(INPUT_OWNERSHIP_MAP_BRIDGE_TYPE).toBe("inputOwnershipMap");
         expect(OVERLAY_PASS_MAP_BRIDGE_TYPE).toBe("overlayPassMap");
