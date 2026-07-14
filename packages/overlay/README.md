@@ -11,7 +11,7 @@ The public model is `InputOwnershipMap`:
 - Elements should only be marked when their owner differs from `defaultOwner`.
 - The first-stage shapes are `rect` and `roundedRect`.
 
-The SDK does not change page layout and does not route host input itself. It publishes low-frequency ownership data for the host side to validate and consume.
+The SDK does not change page layout and does not route host input itself. Before publishing each low-frequency ownership map, it applies the same map as an SVG luminance mask on `document.documentElement`. Chromium therefore produces the final anti-aliased frame alpha: Web-owned areas remain visible and Host-owned areas expose the host scene. `disable()` restores the page's original inline mask properties.
 
 ## DOM Markers
 
@@ -76,11 +76,11 @@ Removes an API ownership registration. It does not remove DOM attributes.
 
 ### `enable()`
 
-Starts observers and publishes the current ownership state through the current bridge.
+Starts observers, applies the Chromium alpha mask, and publishes the current ownership state through the current bridge.
 
 ### `disable()`
 
-Stops observers and publishes a disabled empty ownership map. Existing API registrations remain in memory, so a later `enable()` can publish them again.
+Stops observers, restores the original root mask, and publishes a disabled empty ownership map. Existing API registrations remain in memory, so a later `enable()` can publish them again.
 
 ### `refresh()`
 
@@ -129,6 +129,8 @@ Viewport metadata comes from:
 - `window.devicePixelRatio || 1`
 
 Refreshes are scheduled from `MutationObserver`, `ResizeObserver`, `scroll`, and `resize`, with throttling. At most 256 regions are published.
+
+The Chromium frame alpha is the visibility source of truth. The published ownership map uses the same geometry only for host-side input routing; Unity does not rebuild a second visibility mask.
 
 ## Current Bridge
 

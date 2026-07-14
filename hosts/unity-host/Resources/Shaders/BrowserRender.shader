@@ -8,8 +8,6 @@ Shader "KimoTech/LichoraHost/BrowserRender"
         _ColorThreshold ("Color Threshold", Range(0.0, 1.0)) = 1
         _FlipY ("Flip Y", Float) = 1
         _UseBrowserAlpha ("Use Browser Alpha", Float) = 0
-        _UseOwnershipMask ("Use Ownership Mask", Float) = 0
-        _OwnershipMaskTex ("Ownership Mask", 2D) = "white" {}
 
         _StencilComp ("Stencil Comparison", Float) = 8
         _Stencil ("Stencil ID", Float) = 0
@@ -75,20 +73,17 @@ Shader "KimoTech/LichoraHost/BrowserRender"
                 float4 vertex : SV_POSITION;
                 fixed4 color : COLOR;
                 float2 uv : TEXCOORD0;
-                float2 ownershipUv : TEXCOORD1;
-                float4 worldPosition : TEXCOORD2;
+                float4 worldPosition : TEXCOORD1;
                 UNITY_VERTEX_OUTPUT_STEREO
             };
 
             sampler2D _MainTex;
-            sampler2D _OwnershipMaskTex;
             float4 _MainTex_ST;
             fixed4 _Color;
             float4 _FilterColor;
             float _ColorThreshold;
             float _FlipY;
             float _UseBrowserAlpha;
-            float _UseOwnershipMask;
             float4 _ClipRect;
 
             v2f vert(appdata v)
@@ -101,8 +96,6 @@ Shader "KimoTech/LichoraHost/BrowserRender"
                 float2 browserUv = TRANSFORM_TEX(v.uv, _MainTex);
                 o.uv = browserUv;
                 o.uv.y = lerp(browserUv.y, 1.0 - browserUv.y, saturate(_FlipY));
-                o.ownershipUv = browserUv;
-                o.ownershipUv.y = 1.0 - browserUv.y;
                 o.color = v.color * _Color;
                 return o;
             }
@@ -119,11 +112,6 @@ Shader "KimoTech/LichoraHost/BrowserRender"
                 else if (_UseBrowserAlpha <= 0.0)
                 {
                     color.a = 1.0;
-                }
-
-                if (_UseOwnershipMask > 0.0)
-                {
-                    color.a *= tex2D(_OwnershipMaskTex, i.ownershipUv).a;
                 }
 
                 #ifdef UNITY_UI_CLIP_RECT

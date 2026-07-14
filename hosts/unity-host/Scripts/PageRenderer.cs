@@ -27,8 +27,6 @@ namespace KimoTech.LichoraHost
 
         public bool FilteredColor = false;
 
-        public BrowserTransparencyMode TransparencyMode = BrowserTransparencyMode.Opaque;
-
         [SerializeField]
         private InputOwnershipSettings _InputOwnershipSettings = new InputOwnershipSettings();
 
@@ -94,7 +92,6 @@ namespace KimoTech.LichoraHost
                 _InputController.InputString
             );
             _FramePump?.Update(_Handler, _Surface);
-            _Surface?.UpdateOwnershipMask(_InputOwnershipSettings.CreateRenderSnapshot());
             _InputController.ResetFrameDeltas();
         }
 
@@ -154,10 +151,9 @@ namespace KimoTech.LichoraHost
         private BrowserRenderSettings CreateRenderSettings()
         {
             return new BrowserRenderSettings(
-                FilteredColor ? BrowserTransparencyMode.ColorKey : TransparencyMode,
+                BrowserTransparencyMode.BrowserAlpha,
                 Color.white,
                 FilteredColor ? 1f : 0f,
-                true,
                 true,
                 BrowserRenderSettings.DefaultMaterialResourcePath
             );

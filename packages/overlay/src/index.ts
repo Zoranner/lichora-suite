@@ -1,4 +1,5 @@
 import { publishInputOwnershipMap } from "./bridge";
+import { syncBrowserAlphaMask } from "./browser-alpha-mask";
 import { OverlayObservers } from "./observers";
 import { scanOwnershipAttributeRegistrations } from "./dom-scan";
 import { createLegacyPassApi, scanLegacyPassAttributeRegistrations, type PassOptions } from "./legacy-pass";
@@ -121,6 +122,7 @@ export function disable(): void {
 }
 
 function publishOwnershipMap(ownershipMap: InputOwnershipMap): void {
+    syncBrowserAlphaMask(ownershipMap);
     publishInputOwnershipMap(toOwnershipPayload(ownershipMap));
 }
 

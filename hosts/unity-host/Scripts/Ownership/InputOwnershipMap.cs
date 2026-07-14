@@ -28,9 +28,6 @@ namespace KimoTech.LichoraHost
         private InputRegion[] _StaticRegions = Array.Empty<InputRegion>();
 
         private InputRegion[] _DynamicRegions = Array.Empty<InputRegion>();
-        private ulong _Revision;
-
-        public ulong Revision => _Revision;
 
         public ulong Version
         {
@@ -49,7 +46,6 @@ namespace KimoTech.LichoraHost
                 }
 
                 _Enabled = value;
-                IncrementRevision();
             }
         }
 
@@ -83,37 +79,16 @@ namespace KimoTech.LichoraHost
                 }
 
                 _DefaultOwner = owner;
-                IncrementRevision();
             }
         }
 
         public InputRegion[] StaticRegions
         {
             get => CopyRegions(_StaticRegions);
-            set
-            {
-                _StaticRegions = CopyRegions(value);
-                IncrementRevision();
-            }
+            set { _StaticRegions = CopyRegions(value); }
         }
 
         public int DynamicRegionCount => _DynamicRegions?.Length ?? 0;
-
-        public bool HasHostVisibleRegion =>
-            IsValidMap
-            && (
-                DefaultOwner == InputOwner.Host
-                || HasRegionOwnedBy(_StaticRegions, InputOwner.Host)
-                || HasRegionOwnedBy(_DynamicRegions, InputOwner.Host)
-            );
-
-        public bool HasWebVisibleRegion =>
-            IsValidMap
-            && (
-                DefaultOwner == InputOwner.Web
-                || HasRegionOwnedBy(_StaticRegions, InputOwner.Web)
-                || HasRegionOwnedBy(_DynamicRegions, InputOwner.Web)
-            );
 
         public void SetDynamicRegions(InputRegion[] regions)
         {
@@ -124,7 +99,6 @@ namespace KimoTech.LichoraHost
             }
 
             _DynamicRegions = nextRegions;
-            IncrementRevision();
         }
 
         public void ClearDynamicRegions()
@@ -135,16 +109,10 @@ namespace KimoTech.LichoraHost
             }
 
             _DynamicRegions = Array.Empty<InputRegion>();
-            IncrementRevision();
         }
 
         public void ResetDynamicOwnership()
         {
-            var changed =
-                !_Enabled
-                || _DefaultOwner != InputOwner.Web
-                || (_DynamicRegions != null && _DynamicRegions.Length > 0);
-
             _Version = 0;
             _Enabled = true;
             _ViewportWidth = 0;
@@ -152,24 +120,6 @@ namespace KimoTech.LichoraHost
             _DeviceScaleFactor = 1f;
             _DefaultOwner = InputOwner.Web;
             _DynamicRegions = Array.Empty<InputRegion>();
-
-            if (changed)
-            {
-                IncrementRevision();
-            }
-        }
-
-        internal InputOwnershipRenderSnapshot CreateRenderSnapshot()
-        {
-            return new InputOwnershipRenderSnapshot(
-                _Revision,
-                _Enabled,
-                DefaultOwner,
-                HasHostVisibleRegion,
-                HasWebVisibleRegion,
-                _StaticRegions ?? Array.Empty<InputRegion>(),
-                _DynamicRegions ?? Array.Empty<InputRegion>()
-            );
         }
 
         public InputOwner ResolveOwner(Vector2 normalizedPosition)
@@ -193,11 +143,6 @@ namespace KimoTech.LichoraHost
         }
 
         private bool IsValidMap => _Enabled && IsValidOwner(_DefaultOwner);
-
-        private void IncrementRevision()
-        {
-            _Revision++;
-        }
 
         private static bool TryResolveOwner(
             InputRegion[] regions,
@@ -273,24 +218,6 @@ namespace KimoTech.LichoraHost
                 && Mathf.Approximately(left.Rect.height, right.Rect.height)
                 && Mathf.Approximately(left.Radius, right.Radius)
                 && left.Disabled == right.Disabled;
-        }
-
-        private static bool HasRegionOwnedBy(InputRegion[] regions, InputOwner owner)
-        {
-            if (regions == null || regions.Length == 0)
-            {
-                return false;
-            }
-
-            foreach (var region in regions)
-            {
-                if (region.IsValid && region.Owner == owner)
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         private static bool IsValidPosition(Vector2 normalizedPosition)

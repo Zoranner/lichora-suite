@@ -15,6 +15,7 @@ Lichora Host is a Unity package for rendering and interacting with web pages thr
 - `session` and `status` have protocol definitions and mappings, and the host opens both. Only `status` currently exposes a host read API; browser-runtime writes and Unity business consumption do not yet form a complete loop.
 - Unity currently consumes caret, surrounding text and ownership output. `ScriptResult` and `PageEvent` are decoded by Protocol and then discarded by Runtime.
 - The web SDK can attempt `window.lichora.postMessage(...)`, but the runtime does not currently inject `window.lichora`; the active bridge is the console fallback.
+- Controlled overlay pages apply their ownership map as a Chromium SVG luminance mask before publishing it. Chromium frame alpha is the visibility source of truth; Unity consumes that alpha directly, while the ownership map is used only for input routing.
 
 ## Windows x64 Release
 
@@ -34,7 +35,7 @@ dist/win-x64/lichora.exe
 Set `BrowserConfig.json` in the application directory to point at that executable.
 Browser output payload decoding is isolated under `Scripts/Protocol` in the Unity-free, dependency-free `KimoTech.LichoraHost.Protocol` assembly. Runtime references Protocol explicitly. Native owns input payload encoding and does not reference Protocol.
 
-The ownership enum model is isolated under `Scripts/Model` in the Unity-free `KimoTech.LichoraHost.Model` assembly. It contains only `InputOwner` and `InputRegionShape`; Unity-backed `InputRegion`, `InputOwnershipMap` and render snapshots remain in Runtime because they depend on Unity serialization and coordinate types.
+The ownership enum model is isolated under `Scripts/Model` in the Unity-free `KimoTech.LichoraHost.Model` assembly. It contains only `InputOwner` and `InputRegionShape`; Unity-backed `InputRegion` and `InputOwnershipMap` remain in Runtime because they depend on Unity serialization and coordinate types.
 
 The C# native boundary is isolated under `Scripts/Native` in the `KimoTech.LichoraHost.Native` assembly. Runtime consumes public IPC, process and IME facades; raw handles, result mapping, P/Invoke declarations and native event buffers remain internal to Native. Runtime disables unsafe code, and `Scripts/Native` is the only supported C# P/Invoke location.
 

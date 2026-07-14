@@ -20,10 +20,32 @@ interface FakeRect {
     height: number;
 }
 
+class FakeStyle {
+    private readonly values = new Map<string, { value: string; priority: string }>();
+
+    public setProperty(name: string, value: string, priority = ""): void {
+        this.values.set(name, { value, priority });
+    }
+
+    public getPropertyValue(name: string): string {
+        return this.values.get(name)?.value ?? "";
+    }
+
+    public getPropertyPriority(name: string): string {
+        return this.values.get(name)?.priority ?? "";
+    }
+
+    public removeProperty(name: string): string {
+        const value = this.getPropertyValue(name);
+        this.values.delete(name);
+        return value;
+    }
+}
+
 class FakeElement {
     public readonly nodeType = 1;
     public attributes = new Map<string, string>();
-    public style: Partial<CSSStyleDeclaration> = {};
+    public style = new FakeStyle() as FakeStyle & Partial<CSSStyleDeclaration>;
     public parentElement: FakeElement | null = null;
     public children: FakeElement[] = [];
     private rect: DOMRect;
@@ -112,6 +134,7 @@ class FakeElement {
 
 class FakeDocument {
     public elements: FakeElement[] = [];
+    public documentElement = new FakeElement({ width: 800, height: 600 });
 
     public querySelectorAll(selector: string): FakeElement[] {
         return this.elements.filter((element) => element.matches(selector));
@@ -169,6 +192,8 @@ class FakeWindow {
     public innerWidth = 800;
     public innerHeight = 600;
     public devicePixelRatio = 2;
+    public scrollX = 120;
+    public scrollY = 340;
     public document = new FakeDocument();
     public listeners = new Map<string, Set<() => void>>();
     public MutationObserver = FakeMutationObserver;
@@ -262,6 +287,14 @@ function latestPayload(fakeWindow: FakeWindow) {
     const latest = fakeWindow.logs.at(-1);
     expect(latest).toStartWith(BRIDGE_PREFIX);
     return JSON.parse(latest!.slice(BRIDGE_PREFIX.length));
+}
+
+function decodeMaskSvg(style: FakeStyle): string {
+    const maskImage = style.getPropertyValue("mask-image");
+    const prefix = 'url("data:image/svg+xml,';
+    expect(maskImage).toStartWith(prefix);
+    expect(maskImage).toEndWith('")');
+    return decodeURIComponent(maskImage.slice(prefix.length, -2));
 }
 
 function containsPoint(rect: DOMRect, x: number, y: number): boolean {
@@ -417,50 +450,46 @@ describe("@lichora/overlay", () => {
         ]);
     });
 
-    test("keeps data-lichora host element background transparent while it is host-owned", () => {
+    test("applies Chromium alpha before publishing and restores the original root mask on disable", () => {
         const fakeWindow = installFakeWindow();
         const scanned = new FakeElement({ x: 10, y: 20, width: 100, height: 50 });
-        const child = new FakeElement({ x: 20, y: 30, width: 80, height: 30 });
-        scanned.style.backgroundColor = "rgb(0, 128, 0)";
-        scanned.style.backgroundImage = "linear-gradient(green, blue)";
-        scanned.style.color = "rgb(21, 92, 61)";
-        scanned.style.textShadow = "0 1px 1px black";
-        scanned.style.caretColor = "auto";
-        child.style.backgroundColor = "rgba(255, 255, 255, 0.68)";
-        child.style.backgroundImage = "linear-gradient(white, green)";
-        child.style.color = "rgb(20, 100, 63)";
-        child.style.textShadow = "0 1px 1px black";
-        child.style.caretColor = "auto";
-        scanned.appendChild(child);
+        const rootStyle = fakeWindow.document.documentElement.style as FakeStyle;
+        rootStyle.setProperty("mask-image", "linear-gradient(black, transparent)", "important");
+        rootStyle.setProperty("-webkit-mask-image", "url(original-mask.svg)");
+        scanned.style.borderRadius = "12px";
         scanned.setAttribute("data-lichora", "host");
         fakeWindow.document.elements.push(scanned);
+        fakeWindow.lichora = {
+            postMessage: (type, payload) => {
+                expect(rootStyle.getPropertyValue("mask-image")).toStartWith('url("data:image/svg+xml,');
+                fakeWindow.nativeMessages.push({ type, payload });
+            },
+        };
 
         enable();
 
-        expect(scanned.style.backgroundColor).toBe("transparent");
-        expect(scanned.style.backgroundImage).toBe("none");
-        expect(scanned.style.color).toBe("transparent");
-        expect(scanned.style.textShadow).toBe("none");
-        expect(scanned.style.caretColor).toBe("transparent");
-        expect(child.style.backgroundColor).toBe("transparent");
-        expect(child.style.backgroundImage).toBe("none");
-        expect(child.style.color).toBe("transparent");
-        expect(child.style.textShadow).toBe("none");
-        expect(child.style.caretColor).toBe("transparent");
+        expect(rootStyle.getPropertyValue("-webkit-mask-image")).toBe(rootStyle.getPropertyValue("mask-image"));
+        expect(rootStyle.getPropertyValue("mask-repeat")).toBe("no-repeat");
+        expect(rootStyle.getPropertyValue("-webkit-mask-repeat")).toBe("no-repeat");
+        expect(rootStyle.getPropertyValue("mask-position")).toBe("120px 340px");
+        expect(rootStyle.getPropertyValue("-webkit-mask-position")).toBe("120px 340px");
+        expect(rootStyle.getPropertyValue("mask-size")).toBe("800px 600px");
+        expect(rootStyle.getPropertyValue("-webkit-mask-size")).toBe("800px 600px");
+        expect(rootStyle.getPropertyValue("mask-mode")).toBe("alpha");
+        const svg = decodeMaskSvg(rootStyle);
+        expect(svg).toContain('mask-type="luminance"');
+        expect(svg).toContain('<rect width="800" height="600" fill="white"/>');
+        expect(svg).toContain(
+            '<rect x="10" y="20" width="100" height="50" rx="12" ry="12" fill="black"/>',
+        );
+        expect(svg).toContain('mask="url(#lichora-ownership-mask)"');
 
-        scanned.setAttribute("data-lichora", "web");
-        refresh();
+        disable();
 
-        expect(scanned.style.backgroundColor).toBe("rgb(0, 128, 0)");
-        expect(scanned.style.backgroundImage).toBe("linear-gradient(green, blue)");
-        expect(scanned.style.color).toBe("rgb(21, 92, 61)");
-        expect(scanned.style.textShadow).toBe("0 1px 1px black");
-        expect(scanned.style.caretColor).toBe("auto");
-        expect(child.style.backgroundColor).toBe("rgba(255, 255, 255, 0.68)");
-        expect(child.style.backgroundImage).toBe("linear-gradient(white, green)");
-        expect(child.style.color).toBe("rgb(20, 100, 63)");
-        expect(child.style.textShadow).toBe("0 1px 1px black");
-        expect(child.style.caretColor).toBe("auto");
+        expect(rootStyle.getPropertyValue("mask-image")).toBe("linear-gradient(black, transparent)");
+        expect(rootStyle.getPropertyPriority("mask-image")).toBe("important");
+        expect(rootStyle.getPropertyValue("-webkit-mask-image")).toBe("url(original-mask.svg)");
+        expect(rootStyle.getPropertyValue("mask-repeat")).toBe("");
     });
 
     test("region registers ownership regions and unregion removes them", () => {
