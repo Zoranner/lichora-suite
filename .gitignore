@@ -15,6 +15,9 @@ Thumbs.db
 /dist/
 *.pdb
 
+# Overlay dependencies
+/packages/overlay/node_modules/
+
 # Runtime logs generated beside packaged CEF runtime
 /dist/win-x64/debug.log
 /dist/debug.log

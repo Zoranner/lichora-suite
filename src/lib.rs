@@ -9,7 +9,6 @@
 //! - Shared memory IPC with host engines
 //! - Full input support (mouse, keyboard, IME)
 //! - JavaScript execution
-//! - DevTools support
 //!
 //! # Example
 //!

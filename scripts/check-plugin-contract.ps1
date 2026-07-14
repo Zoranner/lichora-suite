@@ -11,6 +11,26 @@ if (-not (Test-Path -LiteralPath $manifestPath)) {
 
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
 $unityRoot = Join-Path $repoRoot "hosts\unity-host"
+$missingUnityMetadata = @(
+    Get-ChildItem -LiteralPath $unityRoot -Force -Recurse |
+        Where-Object {
+            if ($_.Name -like "*.meta") {
+                return $false
+            }
+
+            if ($_.PSIsContainer -and $_.Name.EndsWith("~")) {
+                return $false
+            }
+
+            -not (Test-Path -LiteralPath "$($_.FullName).meta" -PathType Leaf)
+        } |
+        Sort-Object -Property FullName |
+        ForEach-Object { "$($_.FullName).meta" }
+)
+if ($missingUnityMetadata.Count -gt 0) {
+    $missingMetadataList = ($missingUnityMetadata | ForEach-Object { "  - $_" }) -join [Environment]::NewLine
+    throw "Unity package metadata is missing:$([Environment]::NewLine)$missingMetadataList"
+}
 $nativeScriptsPath = Join-Path $unityRoot "Scripts\Native"
 $protocolScriptsPath = Join-Path $unityRoot "Scripts\Protocol"
 $protocolAsmdefPath = Join-Path $protocolScriptsPath "KimoTech.LichoraHost.Protocol.asmdef"

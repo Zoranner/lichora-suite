@@ -2,7 +2,7 @@
     "name": "@lichora/overlay",
     "version": "0.1.0",
     "private": true,
-    "description": "Web-side pass map SDK boundary for Lichora controlled overlays.",
+    "description": "Web-side input ownership SDK for Lichora controlled overlays.",
     "type": "module",
     "scripts": {
         "test": "bun test",
@@ -18,5 +18,8 @@
         "fixtures",
         "examples",
         "README.md"
-    ]
+    ],
+    "devDependencies": {
+        "typescript": "^7.0.2"
+    }
 }

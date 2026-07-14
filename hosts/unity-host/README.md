@@ -6,8 +6,15 @@ Lichora Host is a Unity package for rendering and interacting with web pages thr
 
 - Unity starts `lichora.exe` as an external process.
 - Unity communicates with the browser process through Rust IPC v2 via `lichora_ipc_native`.
-- Mouse, keyboard, IME, JavaScript requests, frame data, output events and status diagnostics use typed IPC channels.
+- Mouse, keyboard, IME, JavaScript requests, frame data and output events use typed IPC channels. The current session and status boundary is summarized below.
 - The old MemoryStacks runtime is not part of this package release line.
+
+## Current Implementation Boundary
+
+- The handler currently processes only `Shutdown`, `AddBrowser`, `RemoveBrowser` and `ResizeBrowser` control commands.
+- `session` and `status` have protocol definitions and mappings, and the host opens both. Only `status` currently exposes a host read API; browser-runtime writes and Unity business consumption do not yet form a complete loop.
+- Unity currently consumes caret, surrounding text and ownership output. `ScriptResult` and `PageEvent` are decoded by Protocol and then discarded by Runtime.
+- The web SDK can attempt `window.lichora.postMessage(...)`, but the runtime does not currently inject `window.lichora`; the active bridge is the console fallback.
 
 ## Windows x64 Release
 

@@ -8,9 +8,11 @@
 
 **Tech Stack:** Unity asmdef, C#, PowerShell contract checks, CSharpier, Rust Cargo, Bun.
 
+**Status:** Completed. Unity Editor import and in-Unity assembly compilation remain unverified.
+
 ---
 
-### Task 1: Add failing assembly boundary checks
+### Add failing assembly boundary checks
 
 - [x] Require the confirmed Unity.Collections GUID in Runtime and Native.
 - [x] Require Protocol `noEngineReferences` and reject Unity imports in Protocol.
@@ -20,14 +22,14 @@
 - [x] Scan all existing Unity C# source files, including untracked files.
 - [x] Run the contract check and confirm the current boundary fails.
 
-### Task 2: Move the IPC facade into Native
+### Move the IPC facade into Native
 
 - [x] Move `BrowserIpcClient`, control/input writers, output/frame/status readers and metadata into `Scripts/Native`.
 - [x] Move input payload encoding and input event kind into Native internal implementation.
 - [x] Preserve all existing script `.meta` GUIDs.
 - [x] Keep public facade class names stable for Runtime callers.
 
-### Task 3: Tighten Protocol and asmdef configuration
+### Tighten Protocol and asmdef configuration
 
 - [x] Restore the confirmed Unity.Collections GUID.
 - [x] Disable unsafe code in Runtime.
@@ -35,14 +37,14 @@
 - [x] Remove Native to Protocol and unrelated business assembly references.
 - [x] Keep browser output DTOs in Protocol for Runtime consumption.
 
-### Task 4: Isolate process and IME facades
+### Isolate process and IME facades
 
 - [x] Keep process P/Invoke behind `NativeProcessSpawner`.
 - [x] Add `NativeImeClient` to convert raw ABI state and event buffers into stable public values.
 - [x] Move `LinuxNativeImeModule` back to Runtime because it depends on Runtime input interfaces and Unity orchestration.
 - [x] Keep `NativeImeBridge` and raw event types internal.
 
-### Task 5: Update documentation and verification
+### Update documentation and verification
 
 - [x] Document the public facade and internal implementation boundary.
 - [x] Document the actual Runtime, Native, Protocol and Model dependency direction.

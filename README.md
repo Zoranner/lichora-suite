@@ -1,19 +1,19 @@
 # Lichora
 
-Lichora 是面向宿主应用的可嵌入 Web Surface 运行时。当前实现基于 Rust、CEF OSR 和 typed IPC，可以把网页渲染成宿主可消费的 BGRA frame，并通过 IPC 接收输入、发布输出事件和状态诊断。
+Lichora 是面向宿主应用的可嵌入 Web Surface 运行时。当前实现基于 Rust、CEF OSR 和 typed IPC，可以把网页渲染成宿主可消费的 BGRA frame，并通过 IPC 接收输入和发布输出事件。
 
 当前首个宿主适配是 Unity，位于 `hosts/unity-host`。核心 runtime、IPC crate 和发布产物统一使用 Lichora 命名。
 
 ## 当前状态
 
 - Windows 目标产物为 `dist/win-x64/lichora.exe`、`dist/win-x64/lichora_ipc_native.dll` 和 `dist/win-x64/process_host.dll`。
-- Linux 目标产物为 `dist/linux-x64/lichora`、`dist/linux-x64/liblichora_ipc_native.so` 和 `dist/linux-x64/libprocess_host.so`。
+- Linux 构建目标产物为 `dist/linux-x64/lichora`、`dist/linux-x64/liblichora_ipc_native.so` 和 `dist/linux-x64/libprocess_host.so`；其中 Unity Linux IPC importer 当前禁用，插件 manifest 标记为 `release: false`，不属于当前发布支持面。
 - Cargo root package 的 binary target 叫 `lichora`，library target 显式命名为 `lichora_core`，避免 Windows MSVC 下同包 bin/lib 同名时争用 PDB。
 - `dist/win-x64` 同时放置 CEF runtime 文件，例如 `libcef.dll`、pak/dat/bin 文件和 `locales/`。
 - IPC v2 架构、wire format 和浏览器能力设计由本仓库文档维护。
 - Capture 使用 `FrameRing` 一等通道。
 - Mouse move 使用 latest-only 状态；点击、滚轮、键盘、IME 和脚本请求使用 typed queue。
-- Status page 是必需通道，用于定位输入积压、丢帧、ack 延迟和进程状态。
+- Status page 是协议设计要求，用于定位输入积压、丢帧、ack 延迟和进程状态；完整 runtime/Unity 闭环仍待实现。
 - Web/Host 融合和输入归属设计见 `docs/design/web-host-overlay.md`。
 
 ## 项目结构
@@ -91,7 +91,7 @@ Linux 发布构建：
 dist/linux-x64/
 ```
 
-该目录包含 `lichora`、`liblichora_ipc_native.so` 和 `libprocess_host.so`。native 插件会复制到 `hosts/unity-host/Plugins/Linux/`，供 Unity Linux Editor/Player 加载。CEF runtime 文件会在 `CEF_PATH` 可用时复制到发布目录。
+该目录包含 `lichora`、`liblichora_ipc_native.so` 和 `libprocess_host.so`。native 插件会复制到 `hosts/unity-host/Plugins/Linux/`；当前 `liblichora_ipc_native.so` 的 Unity importer 已禁用，且插件 manifest 标记为 `release: false`，因此不能据此声明 Unity Linux IPC runtime 已受支持。CEF runtime 文件会在 `CEF_PATH` 可用时复制到发布目录。
 
 ## Unity handler 模式
 
@@ -101,7 +101,7 @@ Unity 侧启动 handler 进程时，第一个非选项参数是 handler GUID：
 .\dist\win-x64\lichora.exe 12345678-1234-1234-1234-123456789abc --graphics-mode=auto
 ```
 
-进程启动后创建 IPC v2 session，并通过 `control`、`status`、`input`、`frame` 和 `output` 通道完成浏览器管理、输入、帧发布和诊断。原生插件输入、帧和输出热路径统一使用 `ebi_browser_input_open`、`ebi_browser_frame_open` 和 `ebi_browser_output_open` 得到的 typed browser handle；旧 `*_for_browser` session-handle 兼容导出已移除。
+handler GUID 用作 IPC v2 session namespace。当前 handler runtime 的 `control` 只处理 `Shutdown`、`AddBrowser`、`RemoveBrowser` 和 `ResizeBrowser`；`session`、`status` 已有协议与映射，宿主会打开两者，当前仅 `status` 暴露宿主读取 API，browser runtime 写入和 Unity 业务消费仍未形成完整闭环。原生插件输入、帧和输出热路径统一使用 `ebi_browser_input_open`、`ebi_browser_frame_open` 和 `ebi_browser_output_open` 得到的 typed browser handle；旧 `*_for_browser` session-handle 兼容导出已移除。
 
 旧 Unity 启动参数 `--heartbeat-timeout-ms` 和 `--heartbeat-stall-grace-ms` 不再支持。当前 IPC v2 不保留旧 heartbeat 退出机制，传入这些参数会按未知选项失败。
 
@@ -117,12 +117,12 @@ Unity 侧启动 handler 进程时，第一个非选项参数是 handler GUID：
 
 | 通道 | 方向 | 用途 |
 | --- | --- | --- |
-| `session` | 双向 | 协议版本、capabilities 和生命周期 |
-| `control` | Unity -> Browser | 页面创建、移除、缩放、关闭和 DevTools |
-| `status` | Browser -> Unity | 进程、输入、帧、错误和 counters |
+| `session` | 双向 | 已有协议与映射，宿主会打开；当前不暴露宿主读取 API |
+| `control` | Unity -> Browser | 当前仅处理 `Shutdown`、`AddBrowser`、`RemoveBrowser` 和 `ResizeBrowser` |
+| `status` | Browser -> Unity | 已有协议与映射，宿主会打开并暴露读取 API；browser runtime 写入和 Unity 业务消费仍未形成完整闭环 |
 | `input` | Unity -> Browser | 鼠标、键盘、IME 和脚本请求 |
 | `frame` | Browser -> Unity | BGRA frame ring 和 dirty rect |
-| `output` | Browser -> Unity | caret、surrounding text、脚本结果和页面事件 |
+| `output` | Browser -> Unity | 当前实际消费 caret、surrounding text 和 ownership；`ScriptResult`、`PageEvent` 仅完成协议解码，Unity Runtime 会丢弃 |
 
 `docs/protocol.md` 记录当前协议入口和验证边界。
 
@@ -142,6 +142,6 @@ Unity 侧启动 handler 进程时，第一个非选项参数是 handler GUID：
 .\scripts\check-quality.ps1
 ```
 
-该入口依次检查 Rust `fmt`/`clippy`、`packages/overlay` 的 Bun `test`/`typecheck`/`check-package`，并递归收集 `hosts/unity-host` Package 中现存的 C# 源码执行 `csharpier check`，包括 Runtime、Editor、Samples 和尚未跟踪的新文件。入口最后调用 `scripts/check-plugin-contract.ps1` 检查 Unity 程序集和插件静态契约。
+该入口依次执行 Rust `cargo fmt --all -- --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo test --no-default-features --all-targets`，再在 `packages/overlay` 依次执行 `bun install --frozen-lockfile` 和 `bun run check`，按 lockfile 安装固定依赖版本；本地 `node_modules` 由 `.gitignore` 忽略。随后递归收集 `hosts/unity-host` Package 中现存的 C# 源码执行 `csharpier check`，包括 Runtime、Editor、Samples 和尚未跟踪的新文件；最后调用 `scripts/check-plugin-contract.ps1` 检查 Unity 程序集和插件静态契约。
 
 可使用 `-SkipRust`、`-SkipOverlay`、`-SkipUnity` 或 `-SkipPackaging` 跳过对应阶段。Unity 阶段只读取包内源码，不启动 Unity Editor、batchmode、BuildPipeline，也不执行 Unity 生成的 `.sln`/`.csproj` 编译。

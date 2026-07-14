@@ -8,9 +8,11 @@
 
 **Tech Stack:** Unity asmdef JSON、C#、PowerShell、CSharpier、Git 静态引用检查。
 
+**状态：** 已被 [Unity Native Facade Boundary Implementation Plan](2026-07-10-Unity-native-facade-boundary.md) 取代。本文仅保留早期实施记录，不再作为当前程序集边界依据。
+
 ---
 
-### Task 1: 建立 Native 程序集边界
+### 建立 Native 程序集边界
 
 **Files:**
 - Create: `hosts/unity-host/Scripts/Native/KimoTech.LichoraHost.Native.asmdef`
@@ -37,7 +39,7 @@ Move only the four native bridge files. Preserve namespace, class names, method 
 
 Move each `.meta` file with its C# file and retain the original GUID. Create only the new directory `.meta` if Unity package layout requires it; do not regenerate script GUIDs.
 
-### Task 2: Add static Native boundary checks
+### Add static Native boundary checks
 
 **Files:**
 - Modify: `scripts/check-plugin-contract.ps1`
@@ -61,7 +63,7 @@ Check that Runtime references Native and Native does not reference Runtime. Repo
 
 Update package and development documentation to state that `Scripts/Native` is the only C# P/Invoke boundary and that namespace compatibility is intentional.
 
-### Task 3: Format and static verification
+### Format and static verification
 
 **Files:**
 - No additional source files.

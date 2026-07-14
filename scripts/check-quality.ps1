@@ -26,11 +26,13 @@ try {
     if (-not $SkipRust) {
         Invoke-QualityStep "cargo fmt" { cargo fmt --all -- --check }
         Invoke-QualityStep "cargo clippy" { cargo clippy --all-targets --all-features -- -D warnings }
+        Invoke-QualityStep "cargo test" { cargo test --no-default-features --all-targets }
     }
 
     if (-not $SkipOverlay) {
         Push-Location (Join-Path $repoRoot "packages\overlay")
         try {
+            Invoke-QualityStep "overlay install" { bun install --frozen-lockfile }
             Invoke-QualityStep "overlay check" { bun run check }
         }
         finally {

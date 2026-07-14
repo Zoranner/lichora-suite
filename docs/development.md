@@ -53,17 +53,18 @@ Linux 发布构建：
 dist/linux-x64/
 ```
 
-同时会把 `liblichora_ipc_native.so` 和 `libprocess_host.so` 复制到 Unity host 插件目录。
+同时会把 `liblichora_ipc_native.so` 和 `libprocess_host.so` 复制到 Unity host 插件目录。当前 Linux IPC importer 已禁用，插件 manifest 标记为 `release: false`；文件被复制不代表 Unity Linux IPC runtime 已进入发布支持面。
 
 ## Unity handler 运行模型
 
 宿主集成按 IPC v2 session 模型运行。当前首个宿主适配是 Unity：
 
 - Unity 启动一个 handler 进程，首个非选项参数为 session 或 handler GUID。
-- Browser 进程创建项目自有 IPC session。
-- 管理命令走 `control` queue。
+- handler GUID 用作 IPC v2 session namespace；`session` 和 `status` 已有协议与映射，宿主会打开两者，当前仅 `status` 暴露宿主读取 API，browser runtime 写入和 Unity 业务消费仍未形成完整闭环。
+- 管理命令走 `control` queue；handler runtime 当前只处理 `Shutdown`、`AddBrowser`、`RemoveBrowser` 和 `ResizeBrowser`。
 - 鼠标移动走 latest-only，点击、滚轮、键盘、IME 和脚本请求走 typed input queue。
-- Capture 走 `FrameRing`，状态诊断走 `status` page。
+- Capture 走 `FrameRing`。output 当前实际消费 caret、surrounding text 和 ownership；`ScriptResult`、`PageEvent` 仅完成协议解码，Unity Runtime 会丢弃。
+- Web SDK 会尝试调用 `window.lichora`，但 runtime 当前未注入该对象，实际 bridge 走 console fallback。
 
 示例：
 
@@ -120,6 +121,6 @@ Rust 代码变更通常需要 `cargo fmt --all` 和 `cargo clippy --all-targets 
 .\scripts\check-quality.ps1
 ```
 
-默认检查顺序为 Rust `cargo fmt --all -- --check`、Rust `cargo clippy --all-targets --all-features -- -D warnings`、overlay 的 Bun `test`、`typecheck`、`check-package`，以及 Unity C# 的 CSharpier。Unity C# 文件从 `hosts/unity-host` Package 根递归收集，因此 Runtime、Editor、Samples 和未跟踪的新源码都会进入检查；该 Package 目录不包含 Unity `Library` 等宿主工程生成目录。脚本最后执行 `scripts/check-plugin-contract.ps1`。
+默认检查顺序为 Rust `cargo fmt --all -- --check`、Rust `cargo clippy --all-targets --all-features -- -D warnings`、Rust `cargo test --no-default-features --all-targets`，然后在 overlay 中执行 `bun install --frozen-lockfile` 和 `bun run check`，再执行 Unity C# 的 CSharpier，最后执行 `scripts/check-plugin-contract.ps1`。Bun 按 lockfile 安装固定依赖版本，本地 `node_modules` 由 `.gitignore` 忽略。Unity C# 文件从 `hosts/unity-host` Package 根递归收集，因此 Runtime、Editor、Samples 和未跟踪的新源码都会进入检查；该 Package 目录不包含 Unity `Library` 等宿主工程生成目录。
 
 脚本支持 `-SkipRust`、`-SkipOverlay`、`-SkipUnity` 和 `-SkipPackaging`。任何阶段失败都会立即退出，并输出失败阶段。该入口不启动 Unity Editor，不执行 Unity batchmode、Unity Test Framework batchmode、BuildPipeline、`dotnet build`、`msbuild` 或 Unity 生成项目编译。

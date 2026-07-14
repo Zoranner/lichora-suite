@@ -11,6 +11,13 @@
 
 协议字段、通道语义和 wire format 以 `../crates/lichora-ipc` 源码和 golden tests 为准。旧协议字段表已移除，不再维护运行时兼容说明。Web/Host 融合扩展设计见 `design/web-host-overlay.md`。
 
+## 当前实现边界
+
+- handler runtime 的 `control` 当前只处理 `Shutdown`、`AddBrowser`、`RemoveBrowser` 和 `ResizeBrowser`。
+- `session` 和 `status` 已有协议与映射，宿主会打开两者，当前仅 `status` 暴露宿主读取 API，browser runtime 写入和 Unity 业务消费仍未形成完整闭环。
+- output 当前实际进入 Unity 业务链路的是 caret、surrounding text 和 ownership；`ScriptResult`、`PageEvent` 已有协议解码，但 Unity Runtime 当前会丢弃。
+- Web SDK 定义了 `window.lichora.postMessage(...)` 调用路径，但 runtime 尚未注入 `window.lichora`；当前实际使用 console fallback bridge。
+
 ## Typed Payload Header
 
 typed payload 使用固定 8 字节 header，所有多字节整数和浮点数字段均为 little-endian。
@@ -115,4 +122,4 @@ header 后的 payload 字段如下：
 
 当 ownership map 禁用、非法、viewport 与当前页面尺寸不匹配，或宿主侧认为 ownership map 已过期时，默认由浏览器接收输入，避免页面 UI 因过期输入归属失控。
 
-当前 Rust IPC core 已实现 `OverlayPassMap` 和 `InputOwnershipMap` typed output 编解码与 golden test。Unity host 已解码并消费 `InputOwnershipMap`，并保留 `OverlayPassMap` 兼容读取。Web SDK 已能生成 ownership map，并优先调用 `window.lichora.postMessage("inputOwnershipMap", payload)`，不可用时回退临时 console bridge。Rust 侧已把网页 bridge 分发收口到 `browser/dom_bridge.rs`，但正式 CEF message route 或 process message transport、Unity 内 DOM ownership 区域实测仍属于后续验收项。
+当前 Rust IPC core 已实现 `OverlayPassMap` 和 `InputOwnershipMap` typed output 编解码与 golden test。Unity host 已解码并消费 `InputOwnershipMap`，并保留 `OverlayPassMap` 兼容读取。Web SDK 已能生成 ownership map；虽然 API 会尝试调用 `window.lichora.postMessage("inputOwnershipMap", payload)`，但 runtime 当前未注入 `window.lichora`，实际链路使用 console fallback bridge。Rust 侧已把网页 bridge 分发收口到 `browser/dom_bridge.rs`，但正式 CEF message route 或 process message transport、Unity 内 DOM ownership 区域实测仍属于后续验收项。
