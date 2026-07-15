@@ -11,7 +11,7 @@ Windows：
 Linux：
 
 - Rust toolchain
-- CEF 145.0.27 runtime
+- CEF 145.0.27 Release 目录，并通过 `CEF_PATH` 指向
 - GCC/Clang
 - pkg-config
 
@@ -43,17 +43,17 @@ dist/win-x64/
 Linux 发布构建：
 
 ```bash
-./setup-linux.sh
+export CEF_PATH=/path/to/cef/Release
 ./build.sh --release
 ```
 
-`build.sh` 会构建 `lichora`、`lichora-ipc-native` 和 `process-host`，并组装：
+`build.sh` 会构建 `lichora`、`lichora-ipc-native`、`process-host` 和 Linux native IME 插件，并组装：
 
 ```text
 dist/linux-x64/
 ```
 
-同时会把 `liblichora_ipc_native.so` 和 `libprocess_host.so` 复制到 Unity host 插件目录。当前 Linux IPC importer 已禁用，插件 manifest 标记为 `release: false`；文件被复制不代表 Unity Linux IPC runtime 已进入发布支持面。
+同时会把 `liblichora_ipc_native.so`、`libprocess_host.so` 和 `libnative_ime.so` 复制到 Unity host 插件目录。当前 Linux IPC importer 已禁用，插件 manifest 标记为 `release: false`；文件被复制不代表 Unity Linux IPC runtime 已进入发布支持面。
 
 ## Unity handler 运行模型
 
@@ -103,13 +103,7 @@ Capture 走 `FrameRing`，鼠标移动走 latest-only，事件走 SPSC queue。W
 
 Rust 代码变更通常需要 `cargo fmt --all` 和 `cargo clippy --all-targets --all-features -- -D warnings`。仅文档和发布治理改动可用文本扫描、脚本审查和 diff 检查收口。
 
-仓库级质量检查入口为：
-
-```powershell
-.\scripts\check-quality.ps1
-```
-
-该脚本统一执行 Rust、overlay、Unity C# 和插件契约检查；Unity 部分只进行源码与配置静态检查，不启动 Unity Editor，不执行 Unity batchmode、BuildPipeline 或 Unity 生成项目编译。
+仓库级质量检查入口为 `.\scripts\check-quality.ps1`。Unity 部分只进行源码与配置静态检查，不启动 Unity Editor，不执行 Unity batchmode、BuildPipeline 或 Unity 生成项目编译。
 
 当前架构依据以根目录 `README.md`、本文档、`protocol.md` 和 `design/` 下的设计文档为准。`archive/` 下的材料只用于历史追溯。
 

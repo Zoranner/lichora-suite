@@ -45,13 +45,15 @@ echo "=== Building Lichora ==="
 # Check CEF environment
 if [ "$NO_CEF" -eq 0 ] && [ -z "$CEF_PATH" ]; then
     echo "Error: CEF_PATH environment variable not set"
-    echo "Please run setup-linux.sh first or use --no-cef"
+    echo "Set CEF_PATH to the extracted CEF Release directory, or use --no-cef."
     exit 1
 fi
 
 BUILD_ARGS=(build -p lichora -p lichora-ipc-native -p process-host)
+NATIVE_IME_ARGS=(build --manifest-path crates/native-ime/Cargo.toml -p ime-ffi)
 if [ "$RELEASE" -eq 1 ]; then
     BUILD_ARGS+=(--release)
+    NATIVE_IME_ARGS+=(--release)
     TARGET_PROFILE="release"
 else
     TARGET_PROFILE="debug"
@@ -63,22 +65,29 @@ fi
 
 echo "Running: cargo ${BUILD_ARGS[*]}"
 cargo "${BUILD_ARGS[@]}"
+echo "Running: cargo ${NATIVE_IME_ARGS[*]}"
+cargo "${NATIVE_IME_ARGS[@]}"
 
 TARGET_DIR="$SCRIPT_DIR/target/$TARGET_PROFILE"
+NATIVE_IME_TARGET_DIR="$SCRIPT_DIR/crates/native-ime/target/$TARGET_PROFILE"
 mkdir -p "$DIST_DIR"
 
 cp "$TARGET_DIR/lichora" "$DIST_DIR/lichora"
 cp "$TARGET_DIR/liblichora_ipc_native.so" "$DIST_DIR/liblichora_ipc_native.so"
 cp "$TARGET_DIR/libprocess_host.so" "$DIST_DIR/libprocess_host.so"
+cp "$NATIVE_IME_TARGET_DIR/libnative_ime.so" "$DIST_DIR/libnative_ime.so"
 
 if [ -d "$UNITY_PLUGIN_DIR" ]; then
     cp "$TARGET_DIR/liblichora_ipc_native.so" "$UNITY_PLUGIN_DIR/liblichora_ipc_native.so"
     cp "$TARGET_DIR/libprocess_host.so" "$UNITY_PLUGIN_DIR/libprocess_host.so"
+    cp "$NATIVE_IME_TARGET_DIR/libnative_ime.so" "$UNITY_PLUGIN_DIR/libnative_ime.so"
     echo "Copied IPC native plugin to Unity plugin dir: $UNITY_PLUGIN_DIR/liblichora_ipc_native.so"
     echo "Copied process host plugin to Unity plugin dir: $UNITY_PLUGIN_DIR/libprocess_host.so"
+    echo "Copied native IME plugin to Unity plugin dir: $UNITY_PLUGIN_DIR/libnative_ime.so"
 fi
 
 if [ "$NO_CEF" -eq 0 ]; then
+    MISSING_CEF_FILES=()
     for file in \
         libcef.so \
         icudtl.dat \
@@ -89,12 +98,21 @@ if [ "$NO_CEF" -eq 0 ]; then
     do
         if [ -f "$CEF_PATH/$file" ]; then
             cp "$CEF_PATH/$file" "$DIST_DIR/$file"
+        else
+            MISSING_CEF_FILES+=("$file")
         fi
     done
 
     if [ -d "$CEF_PATH/locales" ]; then
         rm -rf "$DIST_DIR/locales"
         cp -R "$CEF_PATH/locales" "$DIST_DIR/locales"
+    else
+        MISSING_CEF_FILES+=("locales")
+    fi
+
+    if [ "${#MISSING_CEF_FILES[@]}" -gt 0 ]; then
+        echo "Error: CEF runtime is incomplete. Missing: ${MISSING_CEF_FILES[*]}"
+        exit 1
     fi
 fi
 
@@ -103,4 +121,5 @@ echo "=== Build Complete ==="
 echo "Executable: $DIST_DIR/lichora"
 echo "IPC native plugin: $DIST_DIR/liblichora_ipc_native.so"
 echo "Process host plugin: $DIST_DIR/libprocess_host.so"
+echo "Native IME plugin: $DIST_DIR/libnative_ime.so"
 echo ""

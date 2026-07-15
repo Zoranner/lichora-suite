@@ -229,4 +229,4 @@ bun run check-package
 bun run check
 ```
 
-`bun run check` is the package quality entry point. It runs the test suite, strict TypeScript checking, and the package export/file contract check without starting a browser or Unity Editor.
+`bun run check` is the package quality entry point. It runs the test suite, strict TypeScript checking for the runtime and example sources, and the package export/file contract check without starting a browser or Unity Editor.

@@ -81,7 +81,7 @@ native 插件还会复制到 `hosts/unity-host/Plugins/Windows/`，这是 Unity 
 Linux 发布构建：
 
 ```bash
-./setup-linux.sh
+export CEF_PATH=/path/to/cef/Release
 ./build.sh --release
 ```
 
@@ -91,7 +91,7 @@ Linux 发布构建：
 dist/linux-x64/
 ```
 
-该目录包含 `lichora`、`liblichora_ipc_native.so` 和 `libprocess_host.so`。native 插件会复制到 `hosts/unity-host/Plugins/Linux/`；当前 `liblichora_ipc_native.so` 的 Unity importer 已禁用，且插件 manifest 标记为 `release: false`，因此不能据此声明 Unity Linux IPC runtime 已受支持。CEF runtime 文件会在 `CEF_PATH` 可用时复制到发布目录。
+该目录包含 `lichora`、`liblichora_ipc_native.so`、`libprocess_host.so` 和 `libnative_ime.so`。native 插件会复制到 `hosts/unity-host/Plugins/Linux/`；当前 `liblichora_ipc_native.so` 的 Unity importer 已禁用，且插件 manifest 标记为 `release: false`，因此不能据此声明 Unity Linux IPC runtime 已受支持。CEF runtime 文件会在 `CEF_PATH` 可用时复制到发布目录。
 
 ## Unity handler 模式
 
@@ -142,6 +142,6 @@ handler GUID 用作 IPC v2 session namespace。当前 handler runtime 的 `contr
 .\scripts\check-quality.ps1
 ```
 
-该入口依次执行 Rust `cargo fmt --all -- --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo test --no-default-features --all-targets`，再在 `packages/overlay` 依次执行 `bun install --frozen-lockfile` 和 `bun run check`，按 lockfile 安装固定依赖版本；本地 `node_modules` 由 `.gitignore` 忽略。随后递归收集 `hosts/unity-host` Package 中现存的 C# 源码执行 `csharpier check`，包括 Runtime、Editor、Samples 和尚未跟踪的新文件；最后调用 `scripts/check-plugin-contract.ps1` 检查 Unity 程序集和插件静态契约。
+该入口覆盖 Rust、overlay、Unity C# 格式和 Unity 插件静态契约；详细命令清单见 [Development](docs/development.md)。
 
 可使用 `-SkipRust`、`-SkipOverlay`、`-SkipUnity` 或 `-SkipPackaging` 跳过对应阶段。Unity 阶段只读取包内源码，不启动 Unity Editor、batchmode、BuildPipeline，也不执行 Unity 生成的 `.sln`/`.csproj` 编译。

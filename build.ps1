@@ -28,39 +28,84 @@ if ($Help) {
 }
 
 $DistDir = Join-Path $PSScriptRoot "dist\win-x64"
+$DefaultCefPath = Join-Path $env:LOCALAPPDATA "Lichora\cef\145.0.27-windows64"
+$RequiredCefLayoutPaths = @(
+    "libcef.dll",
+    "resources.pak",
+    "locales",
+    "CMakeLists.txt",
+    "cmake",
+    "include",
+    "libcef_dll",
+    "archive.json"
+)
+$CefRuntimeFiles = @(
+    "libcef.dll",
+    "chrome_elf.dll",
+    "d3dcompiler_47.dll",
+    "dxcompiler.dll",
+    "dxil.dll",
+    "libEGL.dll",
+    "libGLESv2.dll",
+    "vulkan-1.dll",
+    "vk_swiftshader.dll",
+    "vk_swiftshader_icd.json",
+    "icudtl.dat",
+    "resources.pak",
+    "chrome_100_percent.pak",
+    "chrome_200_percent.pak",
+    "v8_context_snapshot.bin"
+)
+
+function Test-CefLayout {
+    param([string]$Path)
+
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    foreach ($RequiredPath in $RequiredCefLayoutPaths) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Path $RequiredPath))) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Initialize-CefEnvironment {
+    if ($env:CEF_PATH) {
+        if (-not (Test-CefLayout $env:CEF_PATH)) {
+            throw "CEF_PATH does not contain the full CEF build layout. Run .\setup-windows.ps1 -InstallPath `"$env:CEF_PATH`" or fix CEF_PATH."
+        }
+
+        Write-Host "CEF_PATH: $env:CEF_PATH" -ForegroundColor Green
+        return
+    }
+
+    if (Test-CefLayout $DefaultCefPath) {
+        $env:CEF_PATH = $DefaultCefPath
+        $env:PATH += ";$DefaultCefPath"
+        Write-Host "CEF_PATH: $env:CEF_PATH" -ForegroundColor Green
+        return
+    }
+
+    Write-Host "CEF was not found at the default path. Running setup-windows.ps1..." -ForegroundColor Yellow
+    & (Join-Path $PSScriptRoot "setup-windows.ps1") -InstallPath $DefaultCefPath
+
+    if (-not (Test-CefLayout $DefaultCefPath)) {
+        throw "CEF setup finished but the expected CEF layout is still missing: $DefaultCefPath"
+    }
+
+    $env:CEF_PATH = $DefaultCefPath
+    $env:PATH += ";$DefaultCefPath"
+    Write-Host "CEF_PATH: $env:CEF_PATH" -ForegroundColor Green
+}
 
 Write-Host "=== Building Lichora ===" -ForegroundColor Cyan
 
-# Check CEF environment
 if (-not $NoCEF) {
-    if (-not $env:CEF_PATH) {
-        Write-Host "Warning: CEF_PATH environment variable not set" -ForegroundColor Yellow
-        Write-Host "Run .\setup-windows.ps1 first or set CEF_PATH manually" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Host "To build without CEF, use: .\build.ps1 -NoCEF" -ForegroundColor Cyan
-        Write-Host ""
-    } else {
-        Write-Host "CEF_PATH: $env:CEF_PATH" -ForegroundColor Green
-
-        $RequiredCefPaths = @(
-            "libcef.dll",
-            "resources.pak",
-            "locales",
-            "CMakeLists.txt",
-            "cmake",
-            "include",
-            "libcef_dll",
-            "archive.json"
-        )
-        $MissingCefPaths = $RequiredCefPaths | Where-Object { -not (Test-Path (Join-Path $env:CEF_PATH $_)) }
-        if ($MissingCefPaths.Count -gt 0) {
-            Write-Host "Warning: CEF_PATH does not contain the full CEF build layout." -ForegroundColor Yellow
-            foreach ($MissingCefPath in $MissingCefPaths) {
-                Write-Host "  Missing: $MissingCefPath" -ForegroundColor Yellow
-            }
-            Write-Host "Run .\setup-windows.ps1 to install the layout expected by cef-dll-sys." -ForegroundColor Yellow
-        }
-    }
+    Initialize-CefEnvironment
 }
 
 # Build command
@@ -168,39 +213,29 @@ if ($LASTEXITCODE -eq 0) {
 
     if (-not $NoCEF) {
         Write-Host ""
-        if ($env:CEF_PATH -and (Test-Path $env:CEF_PATH)) {
-            Write-Host "Copying CEF runtime to dist\win-x64..." -ForegroundColor Yellow
-            $RuntimeFiles = @(
-                "libcef.dll",
-                "chrome_elf.dll",
-                "d3dcompiler_47.dll",
-                "dxcompiler.dll",
-                "dxil.dll",
-                "libEGL.dll",
-                "libGLESv2.dll",
-                "vulkan-1.dll",
-                "vk_swiftshader.dll",
-                "vk_swiftshader_icd.json",
-                "icudtl.dat",
-                "resources.pak",
-                "chrome_100_percent.pak",
-                "chrome_200_percent.pak",
-                "v8_context_snapshot.bin"
-            )
-            foreach ($File in $RuntimeFiles) {
-                $Source = Join-Path $env:CEF_PATH $File
-                if (Test-Path $Source) {
-                    Copy-Item -Path $Source -Destination (Join-Path $DistDir $File) -Force
-                }
+        Write-Host "Copying CEF runtime to dist\win-x64..." -ForegroundColor Yellow
+        $MissingRuntimeFiles = @()
+        foreach ($File in $CefRuntimeFiles) {
+            $Source = Join-Path $env:CEF_PATH $File
+            if (Test-Path -LiteralPath $Source) {
+                Copy-Item -LiteralPath $Source -Destination (Join-Path $DistDir $File) -Force
+            } else {
+                $MissingRuntimeFiles += $File
             }
-            $Locales = Join-Path $env:CEF_PATH "locales"
-            if (Test-Path $Locales) {
-                Copy-Item -Path $Locales -Destination $DistDir -Recurse -Force
-            }
-            Write-Host "CEF runtime copied to: $DistDir" -ForegroundColor Green
-        } else {
-            Write-Host "CEF runtime was not copied because CEF_PATH is not set or does not exist." -ForegroundColor Yellow
         }
+
+        $Locales = Join-Path $env:CEF_PATH "locales"
+        if (Test-Path -LiteralPath $Locales) {
+            Copy-Item -LiteralPath $Locales -Destination $DistDir -Recurse -Force
+        } else {
+            $MissingRuntimeFiles += "locales"
+        }
+
+        if ($MissingRuntimeFiles.Count -gt 0) {
+            throw "CEF runtime is incomplete. Missing: $($MissingRuntimeFiles -join ', ')"
+        }
+
+        Write-Host "CEF runtime copied to: $DistDir" -ForegroundColor Green
     }
 } else {
     Write-Host ""

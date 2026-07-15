@@ -4,6 +4,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $manifestPath = Join-Path $repoRoot "hosts\unity-host\Plugins\plugin-manifest.json"
 $packagePath = Join-Path $repoRoot "hosts\unity-host\package.json"
 $buildScriptPath = Join-Path $repoRoot "build.ps1"
+$linuxBuildScriptPath = Join-Path $repoRoot "build.sh"
 
 if (-not (Test-Path -LiteralPath $manifestPath)) {
     throw "Plugin manifest not found: $manifestPath"
@@ -211,6 +212,7 @@ $unityRoot = Join-Path $repoRoot "hosts\unity-host"
 $unityScripts = (Get-ChildItem -LiteralPath (Join-Path $unityRoot "Scripts") -Recurse -Filter *.cs -File | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName }) -join "
 "
 $buildScript = Get-Content -Raw -LiteralPath $buildScriptPath
+$linuxBuildScript = Get-Content -Raw -LiteralPath $linuxBuildScriptPath
 
 if ($manifest.schemaVersion -ne 1) {
     throw "Unsupported plugin manifest schema: $($manifest.schemaVersion)"
@@ -237,6 +239,13 @@ foreach ($plugin in $manifest.plugins) {
         $fileName = Split-Path -Leaf $plugin.path
         if ($buildScript -notmatch [regex]::Escape($fileName)) {
             throw "Windows release plugin '$fileName' is not copied by build.ps1."
+        }
+    }
+
+    if ($plugin.platform -eq "Linux" -and $plugin.release) {
+        $fileName = Split-Path -Leaf $plugin.path
+        if ($linuxBuildScript -notmatch [regex]::Escape($fileName)) {
+            throw "Linux release plugin '$fileName' is not copied by build.sh."
         }
     }
 

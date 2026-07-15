@@ -10,7 +10,7 @@ if (packageJson.exports?.["."] !== "./src/index.ts") {
     throw new Error("package.json exports['.'] must point to ./src/index.ts");
 }
 
-for (const entry of ["src", "fixtures", "examples", "README.md"]) {
+for (const entry of ["src", "fixtures", "examples", "scripts", "tsconfig.json", "README.md"]) {
     if (!packageJson.files?.includes(entry)) {
         throw new Error(`package.json files is missing '${entry}'`);
     }

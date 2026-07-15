@@ -18,6 +18,8 @@
         "src",
         "fixtures",
         "examples",
+        "scripts",
+        "tsconfig.json",
         "README.md"
     ],
     "devDependencies": {
