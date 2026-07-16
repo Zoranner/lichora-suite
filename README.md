@@ -46,7 +46,6 @@ lichora-runtime/
 ## Windows 发布目录
 
 ```powershell
-.\setup-windows.ps1
 .\build.ps1 -Release
 ```
 
@@ -56,7 +55,9 @@ lichora-runtime/
 dist/win-x64/
 ```
 
-该目录必须包含：
+如果没有设置 `CEF_PATH`，`build.ps1` 会把 Windows x64 CEF 自动安装到 `%LOCALAPPDATA%\Lichora\cef\145.0.27-windows64`。如果已设置 `CEF_PATH`，该目录必须是完整 CEF build layout，而不是只包含 runtime 文件的目录。
+
+该发布目录必须包含：
 
 - `lichora.exe`
 - `lichora_ipc_native.dll`
