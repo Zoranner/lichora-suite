@@ -26,7 +26,20 @@ try {
     if (-not $SkipRust) {
         Invoke-QualityStep "cargo fmt" { cargo fmt --all -- --check }
         Invoke-QualityStep "cargo clippy" { cargo clippy --all-targets --all-features -- -D warnings }
-        Invoke-QualityStep "cargo test" { cargo test --no-default-features --all-targets }
+        Invoke-QualityStep "cargo test" {
+            $PreviousRustFlags = $env:RUSTFLAGS
+            try {
+                if ($PreviousRustFlags) {
+                    $env:RUSTFLAGS = "$PreviousRustFlags -Dwarnings"
+                } else {
+                    $env:RUSTFLAGS = "-Dwarnings"
+                }
+                cargo test --no-default-features --all-targets
+            }
+            finally {
+                $env:RUSTFLAGS = $PreviousRustFlags
+            }
+        }
     }
 
     if (-not $SkipOverlay) {

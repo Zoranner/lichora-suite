@@ -1,5 +1,6 @@
 mod capture;
 mod caret;
+#[cfg(feature = "cef")]
 mod mouse_event;
 mod overlay;
 mod ownership;
@@ -8,6 +9,7 @@ mod surrounding_text;
 
 pub use capture::CaptureModule;
 pub use caret::parse_caret_console_payload;
+#[cfg(feature = "cef")]
 pub(crate) use mouse_event::{
     button_flags_to_event_flags, decode_ipc_input_payload, IpcImeEvent, IpcInputEvent,
     IpcKeyboardEvent, IpcKeyboardEventType, IpcMouseInputEvent, MouseEventType,
