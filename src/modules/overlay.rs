@@ -234,9 +234,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_shared_sdk_fixture_payload() {
+    fn parses_runtime_fixture_payload() {
         let output = parse_overlay_pass_map_console_payload(include_str!(
-            "../../packages/overlay/fixtures/pass-map.json"
+            "../../tests/fixtures/overlay-pass-map.json"
         ))
         .unwrap();
 

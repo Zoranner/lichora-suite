@@ -1,6 +1,6 @@
 # process-host
 
-宿主原生插件，为 Lichora host adapter 提供跨平台进程管理能力，解决 Unity IL2CPP 等环境不适合直接使用托管 `Process.Start` 的问题。
+宿主原生插件，为 Lichora host adapter 提供跨平台进程管理能力，解决部分宿主环境不适合直接使用托管 `Process.Start` 的问题。
 
 ## 导出 API
 
@@ -36,11 +36,13 @@ cargo zigbuild -p process-host --release --target x86_64-unknown-linux-gnu
 # 产物：target/x86_64-unknown-linux-gnu/release/libprocess_host.so
 ```
 
-## 部署
+## 发布产物
 
-将构建产物复制到 Unity 工程对应的 Plugins 目录：
+runtime 构建脚本会把库复制到对应平台的发布目录：
 
 ```
-hosts/unity-host/Plugins/Windows/process_host.dll
-hosts/unity-host/Plugins/Linux/libprocess_host.so
+dist/win-x64/process_host.dll
+dist/linux-x64/libprocess_host.so
 ```
+
+具体宿主适配层负责从 runtime 发布包中取用该库。

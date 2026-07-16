@@ -39,7 +39,7 @@ jobs:
 
       - name: Run Rust quality gate
         shell: pwsh
-        run: .\scripts\check-quality.ps1 -SkipOverlay -SkipUnity -SkipPackaging
+        run: .\scripts\check-quality.ps1
 
   build-windows:
     name: Build Windows x64
@@ -69,7 +69,7 @@ jobs:
 
       - name: Build Windows runtime
         shell: pwsh
-        run: .\build.ps1 -Release -SkipUnityCopy
+        run: .\build.ps1 -Release
 
       - name: Package Windows runtime
         shell: pwsh
@@ -179,7 +179,7 @@ jobs:
             ${{ runner.os }}-${{ matrix.dist }}-release-cargo-
 
       - name: Build Linux runtime
-        run: ./build.sh --release --dist-name "${{ matrix.dist }}" --skip-unity-copy
+        run: ./build.sh --release --dist-name "${{ matrix.dist }}"
 
       - name: Package Linux runtime
         run: tar -czf "lichora-${{ matrix.dist }}-${GITHUB_REF_NAME}.tar.gz" -C dist "${{ matrix.dist }}"

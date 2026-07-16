@@ -5,7 +5,6 @@
 param(
     [switch]$Release,
     [switch]$NoCEF,
-    [switch]$SkipUnityCopy,
     [switch]$Help
 )
 
@@ -19,7 +18,6 @@ if ($Help) {
     Write-Host "Options:"
     Write-Host "  -Release        Build in release mode (optimized)"
     Write-Host "  -NoCEF          Build without CEF dependency (stub mode)"
-    Write-Host "  -SkipUnityCopy  Do not copy native DLLs into hosts\unity-host"
     Write-Host "  -Help           Show this help message"
     Write-Host ""
     Write-Host "Examples:"
@@ -155,7 +153,6 @@ if ($LASTEXITCODE -eq 0) {
     $IpcNativePath = Join-Path $TargetDir "lichora_ipc_native.dll"
     $IpcNativeOutputName = "lichora_ipc_native.dll"
     $ProcessHostPath = Join-Path $TargetDir "process_host.dll"
-    $UnityPluginDir = Join-Path $PSScriptRoot "hosts\unity-host\Plugins\Windows"
 
     if (Test-Path $BinaryPath) {
         Write-Host "Executable: $BinaryPath" -ForegroundColor Green
@@ -172,20 +169,6 @@ if ($LASTEXITCODE -eq 0) {
         New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
         Copy-Item -Path $IpcNativePath -Destination (Join-Path $DistDir $IpcNativeOutputName) -Force
         Write-Host "Copied IPC native DLL to: $DistDir\$IpcNativeOutputName" -ForegroundColor Green
-
-        if (-not $SkipUnityCopy -and (Test-Path $UnityPluginDir)) {
-            $UnityPluginPath = Join-Path $UnityPluginDir $IpcNativeOutputName
-            try {
-                Copy-Item -Path $IpcNativePath -Destination $UnityPluginPath -Force
-                Write-Host "Copied IPC native DLL to Unity plugin dir: $UnityPluginPath" -ForegroundColor Green
-            } catch {
-                Write-Host "Warning: IPC native DLL was built and copied to dist, but Unity plugin DLL could not be updated." -ForegroundColor Yellow
-                Write-Host "Path: $UnityPluginPath" -ForegroundColor Yellow
-                Write-Host "Reason: $($_.Exception.Message)" -ForegroundColor Yellow
-            }
-        } elseif (-not $SkipUnityCopy) {
-            Write-Host "Unity plugin dir not found; IPC native DLL was not copied to hosts/unity-host." -ForegroundColor Yellow
-        }
     } else {
         Write-Host "Warning: IPC native DLL not found at $IpcNativePath" -ForegroundColor Yellow
     }
@@ -194,18 +177,6 @@ if ($LASTEXITCODE -eq 0) {
         New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
         Copy-Item -Path $ProcessHostPath -Destination (Join-Path $DistDir "process_host.dll") -Force
         Write-Host "Copied process host DLL to: $DistDir\process_host.dll" -ForegroundColor Green
-
-        if (-not $SkipUnityCopy -and (Test-Path $UnityPluginDir)) {
-            $UnityProcessHostPath = Join-Path $UnityPluginDir "process_host.dll"
-            try {
-                Copy-Item -Path $ProcessHostPath -Destination $UnityProcessHostPath -Force
-                Write-Host "Copied process host DLL to Unity plugin dir: $UnityProcessHostPath" -ForegroundColor Green
-            } catch {
-                Write-Host "Warning: process host DLL was built and copied to dist, but Unity plugin DLL could not be updated." -ForegroundColor Yellow
-                Write-Host "Path: $UnityProcessHostPath" -ForegroundColor Yellow
-                Write-Host "Reason: $($_.Exception.Message)" -ForegroundColor Yellow
-            }
-        }
     } else {
         Write-Host "Warning: process host DLL not found at $ProcessHostPath" -ForegroundColor Yellow
     }

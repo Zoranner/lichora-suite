@@ -1,8 +1,5 @@
 param(
-    [switch]$SkipRust,
-    [switch]$SkipOverlay,
-    [switch]$SkipUnity,
-    [switch]$SkipPackaging
+    [switch]$SkipRust
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,31 +39,6 @@ try {
         }
     }
 
-    if (-not $SkipOverlay) {
-        Push-Location (Join-Path $repoRoot "packages\overlay")
-        try {
-            Invoke-QualityStep "overlay install" { bun install --frozen-lockfile }
-            Invoke-QualityStep "overlay check" { bun run check }
-        }
-        finally {
-            Pop-Location
-        }
-    }
-
-    if (-not $SkipUnity) {
-        $unityFiles = @(
-            Get-ChildItem -LiteralPath (Join-Path $repoRoot "hosts\unity-host") -Recurse -Filter *.cs -File |
-                ForEach-Object { $_.FullName }
-        )
-        if ($unityFiles.Count -eq 0) {
-            throw "No Unity C# source files found."
-        }
-        Invoke-QualityStep "Unity CSharpier" { csharpier check $unityFiles }
-    }
-
-    if (-not $SkipPackaging) {
-        Invoke-QualityStep "Unity plugin contract" { & (Join-Path $repoRoot "scripts\check-plugin-contract.ps1") }
-    }
 }
 finally {
     Pop-Location

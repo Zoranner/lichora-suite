@@ -8,7 +8,6 @@ set -e
 RELEASE=0
 NO_CEF=0
 DIST_NAME="linux-x64"
-SKIP_UNITY_COPY=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -26,9 +25,6 @@ while [ "$#" -gt 0 ]; do
             fi
             DIST_NAME="$1"
             ;;
-        --skip-unity-copy)
-            SKIP_UNITY_COPY=1
-            ;;
         --help|-h)
             echo "Lichora Build Script for Linux"
             echo ""
@@ -38,7 +34,6 @@ while [ "$#" -gt 0 ]; do
             echo "  --release           Build optimized release artifacts"
             echo "  --no-cef            Build without CEF dependency"
             echo "  --dist-name NAME    Set dist subdirectory name (default: linux-x64)"
-            echo "  --skip-unity-copy   Do not copy native libraries into hosts/unity-host"
             echo "  --help              Show this help message"
             exit 0
             ;;
@@ -52,7 +47,6 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIST_DIR="$SCRIPT_DIR/dist/$DIST_NAME"
-UNITY_PLUGIN_DIR="$SCRIPT_DIR/hosts/unity-host/Plugins/Linux"
 
 cd "$SCRIPT_DIR"
 
@@ -92,15 +86,6 @@ cp "$TARGET_DIR/lichora" "$DIST_DIR/lichora"
 cp "$TARGET_DIR/liblichora_ipc_native.so" "$DIST_DIR/liblichora_ipc_native.so"
 cp "$TARGET_DIR/libprocess_host.so" "$DIST_DIR/libprocess_host.so"
 cp "$NATIVE_IME_TARGET_DIR/libnative_ime.so" "$DIST_DIR/libnative_ime.so"
-
-if [ "$SKIP_UNITY_COPY" -eq 0 ] && [ -d "$UNITY_PLUGIN_DIR" ]; then
-    cp "$TARGET_DIR/liblichora_ipc_native.so" "$UNITY_PLUGIN_DIR/liblichora_ipc_native.so"
-    cp "$TARGET_DIR/libprocess_host.so" "$UNITY_PLUGIN_DIR/libprocess_host.so"
-    cp "$NATIVE_IME_TARGET_DIR/libnative_ime.so" "$UNITY_PLUGIN_DIR/libnative_ime.so"
-    echo "Copied IPC native plugin to Unity plugin dir: $UNITY_PLUGIN_DIR/liblichora_ipc_native.so"
-    echo "Copied process host plugin to Unity plugin dir: $UNITY_PLUGIN_DIR/libprocess_host.so"
-    echo "Copied native IME plugin to Unity plugin dir: $UNITY_PLUGIN_DIR/libnative_ime.so"
-fi
 
 if [ "$NO_CEF" -eq 0 ]; then
     MISSING_CEF_FILES=()
