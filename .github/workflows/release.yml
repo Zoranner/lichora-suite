@@ -234,9 +234,14 @@ jobs:
           tar -xjf $archivePath -C $extractPath
           $root = Get-ChildItem -LiteralPath $extractPath -Directory | Select-Object -First 1
           Copy-Item -Path (Join-Path $root.FullName "Release/*") -Destination $installPath -Recurse -Force
-          Copy-Item -Path (Join-Path $root.FullName "Resources/*") -Destination $installPath -Recurse -Force
+          $resourcesPath = Join-Path $root.FullName "Resources"
+          if (Test-Path -LiteralPath $resourcesPath) {
+            Copy-Item -Path (Join-Path $resourcesPath "*") -Destination $installPath -Recurse -Force
+          }
           Copy-Item -Path (Join-Path $root.FullName "Release/*") -Destination $runtimePath -Recurse -Force
-          Copy-Item -Path (Join-Path $root.FullName "Resources/*") -Destination $runtimePath -Recurse -Force
+          if (Test-Path -LiteralPath $resourcesPath) {
+            Copy-Item -Path (Join-Path $resourcesPath "*") -Destination $runtimePath -Recurse -Force
+          }
           foreach ($entry in @("CMakeLists.txt", "cmake", "include", "libcef_dll")) {
             Copy-Item -LiteralPath (Join-Path $root.FullName $entry) -Destination $installPath -Recurse -Force
           }
