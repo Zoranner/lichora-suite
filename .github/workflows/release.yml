@@ -157,6 +157,11 @@ jobs:
           foreach ($entry in @("CMakeLists.txt", "cmake", "include", "libcef_dll")) {
             Copy-Item -LiteralPath (Join-Path $root.FullName $entry) -Destination $installPath -Recurse -Force
           }
+          @{
+            type = $archive.type
+            name = $archive.name
+            sha1 = $archive.sha1
+          } | ConvertTo-Json | Out-File -FilePath (Join-Path $installPath "archive.json") -Encoding utf8
           "CEF_PATH=$installPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Cache Cargo dependencies
@@ -245,6 +250,11 @@ jobs:
           foreach ($entry in @("CMakeLists.txt", "cmake", "include", "libcef_dll")) {
             Copy-Item -LiteralPath (Join-Path $root.FullName $entry) -Destination $installPath -Recurse -Force
           }
+          @{
+            type = $archive.type
+            name = $archive.name
+            sha1 = $archive.sha1
+          } | ConvertTo-Json | Out-File -FilePath (Join-Path $installPath "archive.json") -Encoding utf8
           "CEF_PATH=$installPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CEF_RUNTIME_PATH=$runtimePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
