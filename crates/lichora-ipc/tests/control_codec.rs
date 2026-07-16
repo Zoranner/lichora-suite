@@ -1,6 +1,6 @@
 use ipc::{ControlCommand, ControlDecodeError};
 
-const MAGIC: [u8; 4] = [b'E', b'B', b'C', b'C'];
+const MAGIC: [u8; 4] = *b"EBCC";
 const VERSION: [u8; 2] = [1, 0];
 
 fn header(kind: u16) -> Vec<u8> {
