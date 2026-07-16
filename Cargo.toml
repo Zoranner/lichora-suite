@@ -1,6 +1,6 @@
 [package]
 name = "lichora"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Lichora embedded web runtime using CEF"
 authors = ["KimoTech"]

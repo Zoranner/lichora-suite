@@ -760,7 +760,7 @@ dependencies = [
 
 [[package]]
 name = "lichora"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "cc",
@@ -781,7 +781,7 @@ dependencies = [
 
 [[package]]
 name = "lichora-ipc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "memmap2",
  "tempfile",
@@ -790,7 +790,7 @@ dependencies = [
 
 [[package]]
 name = "lichora-ipc-native"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lichora-ipc",
  "tempfile",
