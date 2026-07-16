@@ -12,6 +12,7 @@ Lichora Runtime 是面向宿主应用的可嵌入 Web Surface 运行时。当前
 - Windows 发布产物为 `dist/win-x64/lichora.exe`、`dist/win-x64/lichora_ipc_native.dll` 和 `dist/win-x64/process_host.dll`。
 - Linux 发布产物为 `dist/linux-x64/lichora`、`dist/linux-x64/liblichora_ipc_native.so`、`dist/linux-x64/libprocess_host.so` 和 `dist/linux-x64/libnative_ime.so`。
 - macOS 发布产物为 `dist/macos-x64/lichora`、`dist/macos-x64/liblichora_ipc_native.dylib`、`dist/macos-x64/libprocess_host.dylib` 和 CEF runtime。
+- GitHub Release 额外发布 `lichora-native-plugins-<tag>.zip`，按平台聚合原生 ABI 库，供宿主适配仓库单独下载。
 - Cargo root package 的 binary target 叫 `lichora`，library target 显式命名为 `lichora_core`，避免 Windows MSVC 下同包 bin/lib 同名时争用 PDB。
 - `dist/*` 会放置 CEF runtime 文件，例如 `libcef.*`、pak/dat/bin 文件和 `locales/`。
 - IPC v2 架构、wire format 和浏览器能力设计由本仓库文档维护。

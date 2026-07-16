@@ -216,6 +216,114 @@ jobs:
       - name: Display artifact structure
         run: ls -R artifacts
 
+      - name: Package native plugins
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import shutil
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          artifacts = Path("artifacts")
+          package_root = Path(f"lichora-native-plugins-{tag}")
+          archive_path = Path(f"lichora-native-plugins-{tag}.zip")
+
+          if package_root.exists():
+              shutil.rmtree(package_root)
+          if archive_path.exists():
+              archive_path.unlink()
+          package_root.mkdir()
+
+          targets = {
+              "win-x64": {
+                  "archive": artifacts / "lichora-win-x64" / f"lichora-win-x64-{tag}.zip",
+                  "kind": "zip",
+                  "files": ["lichora_ipc_native.dll", "process_host.dll"],
+              },
+              "linux-x64": {
+                  "archive": artifacts / "lichora-linux-x64" / f"lichora-linux-x64-{tag}.tar.gz",
+                  "kind": "tar",
+                  "files": ["liblichora_ipc_native.so", "libprocess_host.so", "libnative_ime.so"],
+              },
+              "linux-arm64": {
+                  "archive": artifacts / "lichora-linux-arm64" / f"lichora-linux-arm64-{tag}.tar.gz",
+                  "kind": "tar",
+                  "files": ["liblichora_ipc_native.so", "libprocess_host.so", "libnative_ime.so"],
+              },
+              "macos-x64": {
+                  "archive": artifacts / "lichora-macos-x64" / f"lichora-macos-x64-{tag}.tar.gz",
+                  "kind": "tar",
+                  "files": ["liblichora_ipc_native.dylib", "libprocess_host.dylib"],
+              },
+          }
+
+          def zip_member_by_basename(archive, basename):
+              for name in archive.namelist():
+                  if Path(name).name == basename:
+                      return name
+              raise FileNotFoundError(f"{basename} not found in {archive.filename}")
+
+          def tar_member_by_basename(archive, basename):
+              for member in archive.getmembers():
+                  if member.isfile() and Path(member.name).name == basename:
+                      return member
+              raise FileNotFoundError(f"{basename} not found in {archive.name}")
+
+          manifest_targets = {}
+          checksums = []
+          for target, spec in targets.items():
+              target_dir = package_root / target
+              target_dir.mkdir()
+              archive_path_for_target = spec["archive"]
+              if not archive_path_for_target.is_file():
+                  raise FileNotFoundError(f"artifact not found: {archive_path_for_target}")
+
+              manifest_targets[target] = []
+              if spec["kind"] == "zip":
+                  with zipfile.ZipFile(archive_path_for_target) as archive:
+                      for file_name in spec["files"]:
+                          member = zip_member_by_basename(archive, file_name)
+                          output = target_dir / file_name
+                          output.write_bytes(archive.read(member))
+                          manifest_targets[target].append(file_name)
+              else:
+                  with tarfile.open(archive_path_for_target, "r:gz") as archive:
+                      for file_name in spec["files"]:
+                          member = tar_member_by_basename(archive, file_name)
+                          extracted = archive.extractfile(member)
+                          if extracted is None:
+                              raise FileNotFoundError(f"{file_name} could not be extracted")
+                          output = target_dir / file_name
+                          output.write_bytes(extracted.read())
+                          manifest_targets[target].append(file_name)
+
+          manifest = {
+              "name": "lichora-native-plugins",
+              "version": tag,
+              "targets": manifest_targets,
+          }
+          (package_root / "manifest.json").write_text(
+              json.dumps(manifest, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          for path in sorted(package_root.rglob("*")):
+              if path.is_file():
+                  relative = path.relative_to(package_root).as_posix()
+                  digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                  checksums.append(f"{digest}  {relative}")
+          (package_root / "SHA256SUMS").write_text("\n".join(checksums) + "\n", encoding="utf-8")
+
+          with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+              for path in sorted(package_root.rglob("*")):
+                  if path.is_file():
+                      archive.write(path, path.relative_to(package_root.parent).as_posix())
+          PY
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -228,3 +336,4 @@ jobs:
             artifacts/lichora-linux-x64/lichora-linux-x64-${{ github.ref_name }}.tar.gz
             artifacts/lichora-linux-arm64/lichora-linux-arm64-${{ github.ref_name }}.tar.gz
             artifacts/lichora-macos-x64/lichora-macos-x64-${{ github.ref_name }}.tar.gz
+            lichora-native-plugins-${{ github.ref_name }}.zip

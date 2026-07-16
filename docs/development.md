@@ -78,6 +78,26 @@ export CEF_RUNTIME_PATH=/path/to/cef-runtime
 
 跨平台发布由 GitHub Actions 在 tag `v*` 时触发，当前目标为 Windows x64、Linux x64、Linux arm64 和 macOS x64。发布包包含 runtime 可执行文件、原生 ABI 库和对应平台的 CEF runtime。
 
+Release 同时生成聚合包：
+
+```text
+lichora-native-plugins-<tag>.zip
+```
+
+该包只聚合 host adapter 需要的原生 ABI 库，并按平台放置：
+
+```text
+lichora-native-plugins-<tag>/
+├── win-x64/
+├── linux-x64/
+├── linux-arm64/
+├── macos-x64/
+├── manifest.json
+└── SHA256SUMS
+```
+
+Unity、其他引擎或 SDK 仓库应优先下载这个聚合包获取 native plugins；只有需要浏览器 runtime 和 CEF runtime 时才下载完整平台 runtime 包。
+
 ## Handler 运行模型
 
 宿主集成按 IPC v2 session 模型运行：
