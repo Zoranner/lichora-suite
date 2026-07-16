@@ -1,0 +1,300 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+  CEF_VERSION: "145.0.27"
+
+jobs:
+  test:
+    name: Checks
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'crates/native-ime/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run Rust quality gate
+        shell: pwsh
+        run: .\scripts\check-quality.ps1 -SkipOverlay -SkipUnity -SkipPackaging
+
+  build-windows:
+    name: Build Windows x64
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-release-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-cargo-
+
+      - name: Build Windows runtime
+        shell: pwsh
+        run: .\build.ps1 -Release
+
+      - name: Package Windows runtime
+        shell: pwsh
+        run: |
+          $archive = "lichora-win-x64-${{ github.ref_name }}.zip"
+          Compress-Archive -Path dist\win-x64\* -DestinationPath $archive -Force
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lichora-win-x64
+          path: lichora-win-x64-${{ github.ref_name }}.zip
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux x64
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            cmake \
+            curl \
+            jq \
+            libasound2-dev \
+            libgtk-3-dev \
+            libnss3-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libxkbcommon-dev \
+            pkg-config \
+            xz-utils
+
+      - name: Install CEF
+        shell: pwsh
+        run: |
+          $platform = "linux64"
+          $installPath = Join-Path $env:RUNNER_TEMP "cef"
+          $tempRoot = Join-Path $env:RUNNER_TEMP "lichora-cef"
+          $index = Invoke-RestMethod -Uri "https://cef-builds.spotifycdn.com/index.json"
+          $platformIndex = $index.PSObject.Properties[$platform].Value
+          if (-not $platformIndex) { throw "CEF index does not contain platform $platform" }
+          $version = $platformIndex.versions | Where-Object { $_.cef_version -like "$env:CEF_VERSION+*" } | Select-Object -First 1
+          if (-not $version) { throw "CEF $env:CEF_VERSION was not found for $platform" }
+          $archive = $version.files | Where-Object { $_.type -eq "minimal" } | Select-Object -First 1
+          if (-not $archive) { throw "CEF $($version.cef_version) does not have a minimal archive for $platform" }
+          New-Item -ItemType Directory -Force -Path $tempRoot, $installPath | Out-Null
+          $archivePath = Join-Path $tempRoot $archive.name
+          $url = "https://cef-builds.spotifycdn.com/" + ($archive.name -replace "\+", "%2B")
+          Invoke-WebRequest -Uri $url -OutFile $archivePath
+          if ($archive.sha1) {
+            $actual = (Get-FileHash -Algorithm SHA1 -LiteralPath $archivePath).Hash.ToLowerInvariant()
+            if ($actual -ne $archive.sha1) { throw "CEF SHA1 mismatch. Expected $($archive.sha1), got $actual" }
+          }
+          $extractPath = Join-Path $tempRoot "extract"
+          New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
+          tar -xjf $archivePath -C $extractPath
+          $root = Get-ChildItem -LiteralPath $extractPath -Directory | Select-Object -First 1
+          Copy-Item -Path (Join-Path $root.FullName "Release/*") -Destination $installPath -Recurse -Force
+          Copy-Item -Path (Join-Path $root.FullName "Resources/*") -Destination $installPath -Recurse -Force
+          foreach ($entry in @("CMakeLists.txt", "cmake", "include", "libcef_dll")) {
+            Copy-Item -LiteralPath (Join-Path $root.FullName $entry) -Destination $installPath -Recurse -Force
+          }
+          "CEF_PATH=$installPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+            crates/native-ime/target/
+          key: ${{ runner.os }}-release-cargo-${{ hashFiles('Cargo.lock', 'crates/native-ime/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-cargo-
+
+      - name: Build Linux runtime
+        run: ./build.sh --release
+
+      - name: Package Linux runtime
+        run: tar -czf "lichora-linux-x64-${GITHUB_REF_NAME}.tar.gz" -C dist linux-x64
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lichora-linux-x64
+          path: lichora-linux-x64-${{ github.ref_name }}.tar.gz
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS ${{ matrix.name }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x64
+            os: macos-15-intel
+            cef-platform: macosx64
+            dist: macos-x64
+          - name: arm64
+            os: macos-15
+            cef-platform: macosarm64
+            dist: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install CEF
+        shell: pwsh
+        run: |
+          $platform = "${{ matrix.cef-platform }}"
+          $installPath = Join-Path $env:RUNNER_TEMP "cef"
+          $runtimePath = Join-Path $env:RUNNER_TEMP "cef-runtime"
+          $tempRoot = Join-Path $env:RUNNER_TEMP "lichora-cef"
+          $index = Invoke-RestMethod -Uri "https://cef-builds.spotifycdn.com/index.json"
+          $platformIndex = $index.PSObject.Properties[$platform].Value
+          if (-not $platformIndex) { throw "CEF index does not contain platform $platform" }
+          $version = $platformIndex.versions | Where-Object { $_.cef_version -like "$env:CEF_VERSION+*" } | Select-Object -First 1
+          if (-not $version) { throw "CEF $env:CEF_VERSION was not found for $platform" }
+          $archive = $version.files | Where-Object { $_.type -eq "minimal" } | Select-Object -First 1
+          if (-not $archive) { throw "CEF $($version.cef_version) does not have a minimal archive for $platform" }
+          New-Item -ItemType Directory -Force -Path $tempRoot, $installPath, $runtimePath | Out-Null
+          $archivePath = Join-Path $tempRoot $archive.name
+          $url = "https://cef-builds.spotifycdn.com/" + ($archive.name -replace "\+", "%2B")
+          Invoke-WebRequest -Uri $url -OutFile $archivePath
+          if ($archive.sha1) {
+            $actual = (Get-FileHash -Algorithm SHA1 -LiteralPath $archivePath).Hash.ToLowerInvariant()
+            if ($actual -ne $archive.sha1) { throw "CEF SHA1 mismatch. Expected $($archive.sha1), got $actual" }
+          }
+          $extractPath = Join-Path $tempRoot "extract"
+          New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
+          tar -xjf $archivePath -C $extractPath
+          $root = Get-ChildItem -LiteralPath $extractPath -Directory | Select-Object -First 1
+          Copy-Item -Path (Join-Path $root.FullName "Release/*") -Destination $installPath -Recurse -Force
+          Copy-Item -Path (Join-Path $root.FullName "Resources/*") -Destination $installPath -Recurse -Force
+          Copy-Item -Path (Join-Path $root.FullName "Release/*") -Destination $runtimePath -Recurse -Force
+          Copy-Item -Path (Join-Path $root.FullName "Resources/*") -Destination $runtimePath -Recurse -Force
+          foreach ($entry in @("CMakeLists.txt", "cmake", "include", "libcef_dll")) {
+            Copy-Item -LiteralPath (Join-Path $root.FullName $entry) -Destination $installPath -Recurse -Force
+          }
+          "CEF_PATH=$installPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CEF_RUNTIME_PATH=$runtimePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.dist }}-release-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.dist }}-release-cargo-
+
+      - name: Build macOS runtime
+        run: cargo build -p lichora -p lichora-ipc-native -p process-host --release
+
+      - name: Package macOS runtime
+        run: |
+          dist="dist/${{ matrix.dist }}"
+          mkdir -p "$dist"
+          cp target/release/lichora "$dist/lichora"
+          cp target/release/liblichora_ipc_native.dylib "$dist/liblichora_ipc_native.dylib"
+          cp target/release/libprocess_host.dylib "$dist/libprocess_host.dylib"
+          cp -R "$CEF_RUNTIME_PATH"/. "$dist/"
+          tar -czf "lichora-${{ matrix.dist }}-${GITHUB_REF_NAME}.tar.gz" -C dist "${{ matrix.dist }}"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lichora-${{ matrix.dist }}
+          path: lichora-${{ matrix.dist }}-${{ github.ref_name }}.tar.gz
+          if-no-files-found: error
+
+  create-release:
+    name: Create GitHub Release
+    needs:
+      - build-windows
+      - build-linux
+      - build-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display artifact structure
+        run: ls -R artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/lichora-win-x64/lichora-win-x64-${{ github.ref_name }}.zip
+            artifacts/lichora-linux-x64/lichora-linux-x64-${{ github.ref_name }}.tar.gz
+            artifacts/lichora-macos-x64/lichora-macos-x64-${{ github.ref_name }}.tar.gz
+            artifacts/lichora-macos-arm64/lichora-macos-arm64-${{ github.ref_name }}.tar.gz
