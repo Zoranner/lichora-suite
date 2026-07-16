@@ -93,11 +93,9 @@ jobs:
         include:
           - name: x64
             os: ubuntu-latest
-            cef-platform: linux64
             dist: linux-x64
           - name: arm64
             os: ubuntu-24.04-arm
-            cef-platform: linuxarm64
             dist: linux-arm64
     runs-on: ${{ matrix.os }}
     steps:
@@ -117,7 +115,6 @@ jobs:
             ca-certificates \
             cmake \
             curl \
-            jq \
             libasound2-dev \
             libgtk-3-dev \
             libnss3-dev \
@@ -125,44 +122,8 @@ jobs:
             libxcb1-dev \
             libxkbcommon-dev \
             pkg-config \
+            python3 \
             xz-utils
-
-      - name: Install CEF
-        shell: pwsh
-        run: |
-          $platform = "${{ matrix.cef-platform }}"
-          $installPath = Join-Path $env:RUNNER_TEMP "cef"
-          $tempRoot = Join-Path $env:RUNNER_TEMP "lichora-cef"
-          $index = Invoke-RestMethod -Uri "https://cef-builds.spotifycdn.com/index.json"
-          $platformIndex = $index.PSObject.Properties[$platform].Value
-          if (-not $platformIndex) { throw "CEF index does not contain platform $platform" }
-          $version = $platformIndex.versions | Where-Object { $_.cef_version -like "$env:CEF_VERSION+*" } | Select-Object -First 1
-          if (-not $version) { throw "CEF $env:CEF_VERSION was not found for $platform" }
-          $archive = $version.files | Where-Object { $_.type -eq "minimal" } | Select-Object -First 1
-          if (-not $archive) { throw "CEF $($version.cef_version) does not have a minimal archive for $platform" }
-          New-Item -ItemType Directory -Force -Path $tempRoot, $installPath | Out-Null
-          $archivePath = Join-Path $tempRoot $archive.name
-          $url = "https://cef-builds.spotifycdn.com/" + ($archive.name -replace "\+", "%2B")
-          Invoke-WebRequest -Uri $url -OutFile $archivePath
-          if ($archive.sha1) {
-            $actual = (Get-FileHash -Algorithm SHA1 -LiteralPath $archivePath).Hash.ToLowerInvariant()
-            if ($actual -ne $archive.sha1) { throw "CEF SHA1 mismatch. Expected $($archive.sha1), got $actual" }
-          }
-          $extractPath = Join-Path $tempRoot "extract"
-          New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
-          tar -xjf $archivePath -C $extractPath
-          $root = Get-ChildItem -LiteralPath $extractPath -Directory | Select-Object -First 1
-          Copy-Item -Path (Join-Path $root.FullName "Release/*") -Destination $installPath -Recurse -Force
-          Copy-Item -Path (Join-Path $root.FullName "Resources/*") -Destination $installPath -Recurse -Force
-          foreach ($entry in @("CMakeLists.txt", "cmake", "include", "libcef_dll")) {
-            Copy-Item -LiteralPath (Join-Path $root.FullName $entry) -Destination $installPath -Recurse -Force
-          }
-          @{
-            type = $archive.type
-            name = $archive.name
-            sha1 = $archive.sha1
-          } | ConvertTo-Json | Out-File -FilePath (Join-Path $installPath "archive.json") -Encoding utf8
-          "CEF_PATH=$installPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v4
@@ -200,7 +161,6 @@ jobs:
         include:
           - name: x64
             os: macos-15-intel
-            cef-platform: macosx64
             dist: macos-x64
     runs-on: ${{ matrix.os }}
     steps:
@@ -211,52 +171,6 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install CEF
-        shell: pwsh
-        run: |
-          $platform = "${{ matrix.cef-platform }}"
-          $installPath = Join-Path $env:RUNNER_TEMP "cef"
-          $runtimePath = Join-Path $env:RUNNER_TEMP "cef-runtime"
-          $tempRoot = Join-Path $env:RUNNER_TEMP "lichora-cef"
-          $index = Invoke-RestMethod -Uri "https://cef-builds.spotifycdn.com/index.json"
-          $platformIndex = $index.PSObject.Properties[$platform].Value
-          if (-not $platformIndex) { throw "CEF index does not contain platform $platform" }
-          $version = $platformIndex.versions | Where-Object { $_.cef_version -like "$env:CEF_VERSION+*" } | Select-Object -First 1
-          if (-not $version) { throw "CEF $env:CEF_VERSION was not found for $platform" }
-          $archive = $version.files | Where-Object { $_.type -eq "minimal" } | Select-Object -First 1
-          if (-not $archive) { throw "CEF $($version.cef_version) does not have a minimal archive for $platform" }
-          New-Item -ItemType Directory -Force -Path $tempRoot, $installPath, $runtimePath | Out-Null
-          $archivePath = Join-Path $tempRoot $archive.name
-          $url = "https://cef-builds.spotifycdn.com/" + ($archive.name -replace "\+", "%2B")
-          Invoke-WebRequest -Uri $url -OutFile $archivePath
-          if ($archive.sha1) {
-            $actual = (Get-FileHash -Algorithm SHA1 -LiteralPath $archivePath).Hash.ToLowerInvariant()
-            if ($actual -ne $archive.sha1) { throw "CEF SHA1 mismatch. Expected $($archive.sha1), got $actual" }
-          }
-          $extractPath = Join-Path $tempRoot "extract"
-          New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
-          tar -xjf $archivePath -C $extractPath
-          $root = Get-ChildItem -LiteralPath $extractPath -Directory | Select-Object -First 1
-          Copy-Item -Path (Join-Path $root.FullName "Release/*") -Destination $installPath -Recurse -Force
-          $resourcesPath = Join-Path $root.FullName "Resources"
-          if (Test-Path -LiteralPath $resourcesPath) {
-            Copy-Item -Path (Join-Path $resourcesPath "*") -Destination $installPath -Recurse -Force
-          }
-          Copy-Item -Path (Join-Path $root.FullName "Release/*") -Destination $runtimePath -Recurse -Force
-          if (Test-Path -LiteralPath $resourcesPath) {
-            Copy-Item -Path (Join-Path $resourcesPath "*") -Destination $runtimePath -Recurse -Force
-          }
-          foreach ($entry in @("CMakeLists.txt", "cmake", "include", "libcef_dll")) {
-            Copy-Item -LiteralPath (Join-Path $root.FullName $entry) -Destination $installPath -Recurse -Force
-          }
-          @{
-            type = $archive.type
-            name = $archive.name
-            sha1 = $archive.sha1
-          } | ConvertTo-Json | Out-File -FilePath (Join-Path $installPath "archive.json") -Encoding utf8
-          "CEF_PATH=$installPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CEF_RUNTIME_PATH=$runtimePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v4
@@ -272,17 +186,10 @@ jobs:
             ${{ runner.os }}-${{ matrix.dist }}-release-cargo-
 
       - name: Build macOS runtime
-        run: cargo build -p lichora -p lichora-ipc-native -p process-host --release
+        run: ./build.sh --release --dist-name "${{ matrix.dist }}"
 
       - name: Package macOS runtime
-        run: |
-          dist="dist/${{ matrix.dist }}"
-          mkdir -p "$dist"
-          cp target/release/lichora "$dist/lichora"
-          cp target/release/liblichora_ipc_native.dylib "$dist/liblichora_ipc_native.dylib"
-          cp target/release/libprocess_host.dylib "$dist/libprocess_host.dylib"
-          cp -R "$CEF_RUNTIME_PATH"/. "$dist/"
-          tar -czf "lichora-${{ matrix.dist }}-${GITHUB_REF_NAME}.tar.gz" -C dist "${{ matrix.dist }}"
+        run: tar -czf "lichora-${{ matrix.dist }}-${GITHUB_REF_NAME}.tar.gz" -C dist "${{ matrix.dist }}"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4

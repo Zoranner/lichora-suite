@@ -11,9 +11,17 @@ Windows：
 Linux：
 
 - Rust toolchain
-- CEF 145.0.27 Release 目录，并通过 `CEF_PATH` 指向
 - GCC/Clang
 - pkg-config
+- curl
+- Python 3
+
+macOS：
+
+- Rust toolchain
+- Xcode Command Line Tools
+- curl
+- Python 3
 
 ## 构建与发布
 
@@ -43,14 +51,29 @@ dist/win-x64/
 Linux 发布构建：
 
 ```bash
-export CEF_PATH=/path/to/cef/Release
 ./build.sh --release
 ```
 
-`build.sh` 会构建 `lichora`、`lichora-ipc-native`、`process-host` 和 Linux native IME 插件，并组装：
+`build.sh` 会按当前平台自动下载 CEF 145.0.27 minimal archive，构建 `lichora`、`lichora-ipc-native`、`process-host` 和 Linux native IME 插件，并组装：
 
 ```text
 dist/linux-x64/
+```
+
+macOS x64 发布构建：
+
+```bash
+./build.sh --release --dist-name macos-x64
+```
+
+macOS 不构建 Linux native IME 插件，发布目录包含 `lichora`、`liblichora_ipc_native.dylib`、`libprocess_host.dylib` 和 CEF runtime。
+
+如需使用其他 CEF 安装目录，先设置 `CEF_PATH`；如 build layout 和 runtime 文件分离，再设置 `CEF_RUNTIME_PATH`：
+
+```bash
+export CEF_PATH=/path/to/cef-build-layout
+export CEF_RUNTIME_PATH=/path/to/cef-runtime
+./build.sh --release
 ```
 
 跨平台发布由 GitHub Actions 在 tag `v*` 时触发，当前目标为 Windows x64、Linux x64、Linux arm64 和 macOS x64。发布包包含 runtime 可执行文件、原生 ABI 库和对应平台的 CEF runtime。

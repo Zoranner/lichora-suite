@@ -11,7 +11,7 @@ Lichora Runtime 是面向宿主应用的可嵌入 Web Surface 运行时。当前
 
 - Windows 发布产物为 `dist/win-x64/lichora.exe`、`dist/win-x64/lichora_ipc_native.dll` 和 `dist/win-x64/process_host.dll`。
 - Linux 发布产物为 `dist/linux-x64/lichora`、`dist/linux-x64/liblichora_ipc_native.so`、`dist/linux-x64/libprocess_host.so` 和 `dist/linux-x64/libnative_ime.so`。
-- macOS 发布产物由 CI 组装为 `dist/macos-x64/lichora`、`dist/macos-x64/liblichora_ipc_native.dylib`、`dist/macos-x64/libprocess_host.dylib` 和 CEF runtime。
+- macOS 发布产物为 `dist/macos-x64/lichora`、`dist/macos-x64/liblichora_ipc_native.dylib`、`dist/macos-x64/libprocess_host.dylib` 和 CEF runtime。
 - Cargo root package 的 binary target 叫 `lichora`，library target 显式命名为 `lichora_core`，避免 Windows MSVC 下同包 bin/lib 同名时争用 PDB。
 - `dist/*` 会放置 CEF runtime 文件，例如 `libcef.*`、pak/dat/bin 文件和 `locales/`。
 - IPC v2 架构、wire format 和浏览器能力设计由本仓库文档维护。
@@ -67,20 +67,29 @@ dist/win-x64/
 
 `dist/win-x64/debug.log` 是运行期日志，不应提交。
 
-## Linux 发布目录
+## Linux 和 macOS 发布目录
 
 ```bash
-export CEF_PATH=/path/to/cef/Release
 ./build.sh --release
 ```
 
-脚本成功后，发布目录为：
+脚本会按当前平台自动选择 CEF archive：Linux x64、Linux arm64、macOS x64 或 macOS arm64。如果没有设置 `CEF_PATH`，会下载并安装默认 CEF；如果已设置 `CEF_PATH`，该目录必须是完整 CEF build layout。`CEF_RUNTIME_PATH` 可用于指定单独的 runtime 文件目录。
+
+Linux 脚本成功后，发布目录为：
 
 ```text
 dist/linux-x64/
 ```
 
 该目录包含 `lichora`、`liblichora_ipc_native.so`、`libprocess_host.so`、`libnative_ime.so` 和 CEF runtime 文件。
+
+macOS x64 可显式指定发布目录名：
+
+```bash
+./build.sh --release --dist-name macos-x64
+```
+
+发布目录包含 `lichora`、`liblichora_ipc_native.dylib`、`libprocess_host.dylib` 和 CEF runtime 文件。
 
 ## Handler 模式
 
