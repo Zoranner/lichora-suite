@@ -94,9 +94,6 @@ jobs:
           - name: x64
             os: ubuntu-latest
             dist: linux-x64
-          - name: arm64
-            os: ubuntu-24.04-arm
-            dist: linux-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
@@ -249,11 +246,6 @@ jobs:
                   "kind": "tar",
                   "files": ["liblichora_ipc_native.so", "libprocess_host.so", "libnative_ime.so"],
               },
-              "linux-arm64": {
-                  "archive": artifacts / "lichora-linux-arm64" / f"lichora-linux-arm64-{tag}.tar.gz",
-                  "kind": "tar",
-                  "files": ["liblichora_ipc_native.so", "libprocess_host.so", "libnative_ime.so"],
-              },
               "macos-x64": {
                   "archive": artifacts / "lichora-macos-x64" / f"lichora-macos-x64-{tag}.tar.gz",
                   "kind": "tar",
@@ -334,6 +326,5 @@ jobs:
           files: |
             artifacts/lichora-win-x64/lichora-win-x64-${{ github.ref_name }}.zip
             artifacts/lichora-linux-x64/lichora-linux-x64-${{ github.ref_name }}.tar.gz
-            artifacts/lichora-linux-arm64/lichora-linux-arm64-${{ github.ref_name }}.tar.gz
             artifacts/lichora-macos-x64/lichora-macos-x64-${{ github.ref_name }}.tar.gz
             lichora-native-plugins-${{ github.ref_name }}.zip
