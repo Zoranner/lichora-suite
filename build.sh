@@ -1,20 +1,33 @@
 #!/bin/bash
 # Build Script for Linux
 #
-# Builds Lichora and Unity native plugins for Linux.
+# Builds Lichora runtime artifacts for Linux.
 
 set -e
 
 RELEASE=0
 NO_CEF=0
+DIST_NAME="linux-x64"
+SKIP_UNITY_COPY=0
 
-for arg in "$@"; do
-    case "$arg" in
+while [ "$#" -gt 0 ]; do
+    case "$1" in
         --release)
             RELEASE=1
             ;;
         --no-cef)
             NO_CEF=1
+            ;;
+        --dist-name)
+            shift
+            if [ "$#" -eq 0 ]; then
+                echo "Error: --dist-name requires a value"
+                exit 1
+            fi
+            DIST_NAME="$1"
+            ;;
+        --skip-unity-copy)
+            SKIP_UNITY_COPY=1
             ;;
         --help|-h)
             echo "Lichora Build Script for Linux"
@@ -22,20 +35,23 @@ for arg in "$@"; do
             echo "Usage: ./build.sh [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --release   Build optimized release artifacts"
-            echo "  --no-cef    Build without CEF dependency"
-            echo "  --help      Show this help message"
+            echo "  --release           Build optimized release artifacts"
+            echo "  --no-cef            Build without CEF dependency"
+            echo "  --dist-name NAME    Set dist subdirectory name (default: linux-x64)"
+            echo "  --skip-unity-copy   Do not copy native libraries into hosts/unity-host"
+            echo "  --help              Show this help message"
             exit 0
             ;;
         *)
-            echo "Unknown option: $arg"
+            echo "Unknown option: $1"
             exit 1
             ;;
     esac
+    shift
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DIST_DIR="$SCRIPT_DIR/dist/linux-x64"
+DIST_DIR="$SCRIPT_DIR/dist/$DIST_NAME"
 UNITY_PLUGIN_DIR="$SCRIPT_DIR/hosts/unity-host/Plugins/Linux"
 
 cd "$SCRIPT_DIR"
@@ -77,7 +93,7 @@ cp "$TARGET_DIR/liblichora_ipc_native.so" "$DIST_DIR/liblichora_ipc_native.so"
 cp "$TARGET_DIR/libprocess_host.so" "$DIST_DIR/libprocess_host.so"
 cp "$NATIVE_IME_TARGET_DIR/libnative_ime.so" "$DIST_DIR/libnative_ime.so"
 
-if [ -d "$UNITY_PLUGIN_DIR" ]; then
+if [ "$SKIP_UNITY_COPY" -eq 0 ] && [ -d "$UNITY_PLUGIN_DIR" ]; then
     cp "$TARGET_DIR/liblichora_ipc_native.so" "$UNITY_PLUGIN_DIR/liblichora_ipc_native.so"
     cp "$TARGET_DIR/libprocess_host.so" "$UNITY_PLUGIN_DIR/libprocess_host.so"
     cp "$NATIVE_IME_TARGET_DIR/libnative_ime.so" "$UNITY_PLUGIN_DIR/libnative_ime.so"

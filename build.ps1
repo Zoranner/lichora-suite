@@ -5,6 +5,7 @@
 param(
     [switch]$Release,
     [switch]$NoCEF,
+    [switch]$SkipUnityCopy,
     [switch]$Help
 )
 
@@ -16,9 +17,10 @@ if ($Help) {
     Write-Host "Usage: .\build.ps1 [OPTIONS]"
     Write-Host ""
     Write-Host "Options:"
-    Write-Host "  -Release    Build in release mode (optimized)"
-    Write-Host "  -NoCEF      Build without CEF dependency (stub mode)"
-    Write-Host "  -Help       Show this help message"
+    Write-Host "  -Release        Build in release mode (optimized)"
+    Write-Host "  -NoCEF          Build without CEF dependency (stub mode)"
+    Write-Host "  -SkipUnityCopy  Do not copy native DLLs into hosts\unity-host"
+    Write-Host "  -Help           Show this help message"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  .\build.ps1              # Debug build with CEF"
@@ -171,7 +173,7 @@ if ($LASTEXITCODE -eq 0) {
         Copy-Item -Path $IpcNativePath -Destination (Join-Path $DistDir $IpcNativeOutputName) -Force
         Write-Host "Copied IPC native DLL to: $DistDir\$IpcNativeOutputName" -ForegroundColor Green
 
-        if (Test-Path $UnityPluginDir) {
+        if (-not $SkipUnityCopy -and (Test-Path $UnityPluginDir)) {
             $UnityPluginPath = Join-Path $UnityPluginDir $IpcNativeOutputName
             try {
                 Copy-Item -Path $IpcNativePath -Destination $UnityPluginPath -Force
@@ -181,7 +183,7 @@ if ($LASTEXITCODE -eq 0) {
                 Write-Host "Path: $UnityPluginPath" -ForegroundColor Yellow
                 Write-Host "Reason: $($_.Exception.Message)" -ForegroundColor Yellow
             }
-        } else {
+        } elseif (-not $SkipUnityCopy) {
             Write-Host "Unity plugin dir not found; IPC native DLL was not copied to hosts/unity-host." -ForegroundColor Yellow
         }
     } else {
@@ -193,7 +195,7 @@ if ($LASTEXITCODE -eq 0) {
         Copy-Item -Path $ProcessHostPath -Destination (Join-Path $DistDir "process_host.dll") -Force
         Write-Host "Copied process host DLL to: $DistDir\process_host.dll" -ForegroundColor Green
 
-        if (Test-Path $UnityPluginDir) {
+        if (-not $SkipUnityCopy -and (Test-Path $UnityPluginDir)) {
             $UnityProcessHostPath = Join-Path $UnityPluginDir "process_host.dll"
             try {
                 Copy-Item -Path $ProcessHostPath -Destination $UnityProcessHostPath -Force

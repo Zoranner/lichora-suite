@@ -69,7 +69,7 @@ jobs:
 
       - name: Build Windows runtime
         shell: pwsh
-        run: .\build.ps1 -Release
+        run: .\build.ps1 -Release -SkipUnityCopy
 
       - name: Package Windows runtime
         shell: pwsh
@@ -85,9 +85,21 @@ jobs:
           if-no-files-found: error
 
   build-linux:
-    name: Build Linux x64
+    name: Build Linux ${{ matrix.name }}
     needs: test
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x64
+            os: ubuntu-latest
+            cef-platform: linux64
+            dist: linux-x64
+          - name: arm64
+            os: ubuntu-24.04-arm
+            cef-platform: linuxarm64
+            dist: linux-arm64
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -118,7 +130,7 @@ jobs:
       - name: Install CEF
         shell: pwsh
         run: |
-          $platform = "linux64"
+          $platform = "${{ matrix.cef-platform }}"
           $installPath = Join-Path $env:RUNNER_TEMP "cef"
           $tempRoot = Join-Path $env:RUNNER_TEMP "lichora-cef"
           $index = Invoke-RestMethod -Uri "https://cef-builds.spotifycdn.com/index.json"
@@ -157,21 +169,21 @@ jobs:
             ~/.cargo/git/db/
             target/
             crates/native-ime/target/
-          key: ${{ runner.os }}-release-cargo-${{ hashFiles('Cargo.lock', 'crates/native-ime/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.dist }}-release-cargo-${{ hashFiles('Cargo.lock', 'crates/native-ime/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-release-cargo-
+            ${{ runner.os }}-${{ matrix.dist }}-release-cargo-
 
       - name: Build Linux runtime
-        run: ./build.sh --release
+        run: ./build.sh --release --dist-name "${{ matrix.dist }}" --skip-unity-copy
 
       - name: Package Linux runtime
-        run: tar -czf "lichora-linux-x64-${GITHUB_REF_NAME}.tar.gz" -C dist linux-x64
+        run: tar -czf "lichora-${{ matrix.dist }}-${GITHUB_REF_NAME}.tar.gz" -C dist "${{ matrix.dist }}"
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lichora-linux-x64
-          path: lichora-linux-x64-${{ github.ref_name }}.tar.gz
+          name: lichora-${{ matrix.dist }}
+          path: lichora-${{ matrix.dist }}-${{ github.ref_name }}.tar.gz
           if-no-files-found: error
 
   build-macos:
@@ -296,5 +308,6 @@ jobs:
           files: |
             artifacts/lichora-win-x64/lichora-win-x64-${{ github.ref_name }}.zip
             artifacts/lichora-linux-x64/lichora-linux-x64-${{ github.ref_name }}.tar.gz
+            artifacts/lichora-linux-arm64/lichora-linux-arm64-${{ github.ref_name }}.tar.gz
             artifacts/lichora-macos-x64/lichora-macos-x64-${{ github.ref_name }}.tar.gz
             artifacts/lichora-macos-arm64/lichora-macos-arm64-${{ github.ref_name }}.tar.gz
