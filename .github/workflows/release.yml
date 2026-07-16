@@ -197,10 +197,6 @@ jobs:
             os: macos-15-intel
             cef-platform: macosx64
             dist: macos-x64
-          - name: arm64
-            os: macos-15
-            cef-platform: macosarm64
-            dist: macos-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
@@ -310,4 +306,3 @@ jobs:
             artifacts/lichora-linux-x64/lichora-linux-x64-${{ github.ref_name }}.tar.gz
             artifacts/lichora-linux-arm64/lichora-linux-arm64-${{ github.ref_name }}.tar.gz
             artifacts/lichora-macos-x64/lichora-macos-x64-${{ github.ref_name }}.tar.gz
-            artifacts/lichora-macos-arm64/lichora-macos-arm64-${{ github.ref_name }}.tar.gz
