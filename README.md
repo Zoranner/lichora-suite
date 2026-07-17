@@ -1,143 +1,137 @@
 # Lichora Runtime
 
-Lichora Runtime 是面向宿主应用的可嵌入 Web Surface 运行时。当前实现基于 Rust、CEF OSR 和 typed IPC，把网页渲染成宿主可消费的 BGRA frame，并通过 IPC 接收输入和发布输出事件。
+Lichora Runtime 是 Lichora 的浏览器运行时。它负责启动 CEF 离屏浏览器，把网页渲染为宿主可读取的帧数据，并通过原生 IPC 接收输入和输出页面事件。
 
-本仓库只维护 Rust runtime、IPC crate、原生 C ABI 和跨平台发布产物。宿主适配和 Web overlay 包已拆分到独立仓库：
+Unity、其他引擎或桌面程序不需要直接集成 CEF。宿主只需要启动 runtime，并通过配套 native plugins 与它通信。
 
-- `lichora-host-unity`：Unity host adapter。
-- `lichora-overlay`：`@lichora/overlay` Web package。
+## 下载
 
-## 当前状态
+GitHub Release 会发布以下运行时包：
 
-- Windows 发布产物为 `dist/win-x64/lichora.exe`、`dist/win-x64/lichora_ipc_native.dll` 和 `dist/win-x64/process_host.dll`。
-- Linux 发布产物为 `dist/linux-x64/lichora`、`dist/linux-x64/liblichora_ipc_native.so`、`dist/linux-x64/libprocess_host.so` 和 `dist/linux-x64/libnative_ime.so`。
-- macOS 发布产物为 `dist/macos-x64/lichora`、`dist/macos-x64/liblichora_ipc_native.dylib`、`dist/macos-x64/libprocess_host.dylib` 和 CEF runtime。
-- GitHub Release 额外发布 `lichora-native-plugins-<tag>.zip`，按平台聚合原生 ABI 库，供宿主适配仓库单独下载。
-- Cargo root package 的 binary target 叫 `lichora`，library target 显式命名为 `lichora_core`，避免 Windows MSVC 下同包 bin/lib 同名时争用 PDB。
-- `dist/*` 会放置 CEF runtime 文件，例如 `libcef.*`、pak/dat/bin 文件和 `locales/`。
-- IPC v2 架构、wire format 和浏览器能力设计由本仓库文档维护。
-- Capture 使用 `FrameRing` 一等通道。
-- Mouse move 使用 latest-only 状态；点击、滚轮、键盘、IME 和脚本请求使用 typed queue。
-- Status page 是协议设计要求，用于定位输入积压、丢帧、ack 延迟和进程状态。
+| 平台 | 文件 |
+| --- | --- |
+| Windows x64 | `lichora-win-x64-<tag>.zip` |
+| Linux x64 | `lichora-linux-x64-<tag>.tar.gz` |
+| macOS x64 | `lichora-macos-x64-<tag>.tar.gz` |
 
-## 项目结构
+Release 还会发布：
 
 ```text
-lichora-runtime/
-├── Cargo.toml
-├── Cargo.lock
-├── build.ps1
-├── build.sh
-├── crates/
-│   ├── lichora-ipc/
-│   ├── lichora-ipc-native/
-│   ├── native-ime/
-│   └── process-host/
-├── src/
-│   ├── main.rs
-│   ├── browser/
-│   ├── ipc/
-│   └── modules/
-└── docs/
-    ├── development.md
-    ├── protocol.md
-    └── design/
+lichora-native-plugins-<tag>.zip
 ```
 
-## Windows 发布目录
+这个聚合包只包含宿主侧需要加载的 native plugins，适合 Unity host 或其他宿主适配项目单独下载使用。
+
+当前 release 不包含 Linux arm64 或 macOS arm64 产物。
+
+## 运行时目录
+
+解压平台包后，目录中会包含 runtime 可执行文件、原生库和 CEF runtime 文件。
+
+Windows x64：
+
+```text
+lichora.exe
+lichora_ipc_native.dll
+process_host.dll
+libcef.dll
+locales/
+*.pak
+*.dat
+```
+
+Linux x64：
+
+```text
+lichora
+liblichora_ipc_native.so
+libprocess_host.so
+libnative_ime.so
+libcef.so
+locales/
+*.pak
+*.dat
+```
+
+macOS x64：
+
+```text
+lichora
+liblichora_ipc_native.dylib
+libprocess_host.dylib
+CEF runtime files
+```
+
+## 宿主集成
+
+宿主程序通常不直接让用户启动 `lichora`。推荐流程是：
+
+1. 宿主生成一个 session / handler GUID。
+2. 宿主通过 `process_host` 启动 runtime。
+3. 宿主通过 `lichora_ipc_native` 打开 IPC 通道。
+4. 宿主发送创建浏览器、调整尺寸、输入事件等命令。
+5. 宿主读取 frame / output 通道并显示结果。
+
+启动 handler 的基本形式：
+
+```powershell
+.\lichora.exe 12345678-1234-1234-1234-123456789abc --graphics-mode=auto
+```
+
+Linux / macOS：
+
+```bash
+./lichora 12345678-1234-1234-1234-123456789abc --graphics-mode=auto
+```
+
+单 URL 模式只适合本地手工调试，不是宿主集成入口：
+
+```powershell
+.\lichora.exe --url https://example.com --width 1280 --height 720
+```
+
+## 配套项目
+
+- `lichora-host-unity`：Unity 宿主包。
+- `lichora-overlay`：网页侧 overlay / input ownership SDK，包名为 `@lichora/overlay`。
+
+## 从源码构建
+
+Windows：
 
 ```powershell
 .\build.ps1 -Release
 ```
 
-脚本成功后，发布目录为：
-
-```text
-dist/win-x64/
-```
-
-如果没有设置 `CEF_PATH`，`build.ps1` 会把 Windows x64 CEF 自动安装到 `%LOCALAPPDATA%\Lichora\cef\145.0.27-windows64`。如果已设置 `CEF_PATH`，该目录必须是完整 CEF build layout，而不是只包含 runtime 文件的目录。
-
-该发布目录必须包含：
-
-- `lichora.exe`
-- `lichora_ipc_native.dll`
-- `process_host.dll`
-- CEF runtime：`libcef.dll`、`chrome_elf.dll`、`icudtl.dat`、`resources.pak`、`chrome_*.pak`、`v8_context_snapshot.bin`、`locales/` 等
-- 可选调试文件：`lichora.pdb`、`lichora_core.pdb`、`lichora_ipc_native.pdb`、`process_host.pdb`
-
-`dist/win-x64/debug.log` 是运行期日志，不应提交。
-
-## Linux 和 macOS 发布目录
+Linux / macOS：
 
 ```bash
 ./build.sh --release
 ```
 
-脚本会按当前平台自动选择 CEF archive：Linux x64、Linux arm64、macOS x64 或 macOS arm64。如果没有设置 `CEF_PATH`，会下载并安装默认 CEF；如果已设置 `CEF_PATH`，该目录必须是完整 CEF build layout。`CEF_RUNTIME_PATH` 可用于指定单独的 runtime 文件目录。
+如果没有设置 `CEF_PATH`，构建脚本会下载并安装对应平台的 CEF。已经设置 `CEF_PATH` 时，该路径必须指向完整 CEF build layout，而不是只包含 runtime 文件的目录。
 
-Linux 脚本成功后，发布目录为：
+常用环境变量：
 
-```text
-dist/linux-x64/
-```
+| 变量 | 用途 |
+| --- | --- |
+| `CEF_PATH` | 指定完整 CEF build layout |
+| `CEF_RUNTIME_PATH` | 指定要打包进 `dist` 的 CEF runtime 文件目录 |
+| `CEF_VERSION` | 覆盖默认 CEF 版本前缀 |
+| `CEF_PLATFORM` | 覆盖 CEF 平台 archive 名称 |
 
-该目录包含 `lichora`、`liblichora_ipc_native.so`、`libprocess_host.so`、`libnative_ime.so` 和 CEF runtime 文件。
+## 质量检查
 
-macOS x64 可显式指定发布目录名：
-
-```bash
-./build.sh --release --dist-name macos-x64
-```
-
-发布目录包含 `lichora`、`liblichora_ipc_native.dylib`、`libprocess_host.dylib` 和 CEF runtime 文件。
-
-## Handler 模式
-
-宿主侧启动 handler 进程时，第一个非选项参数是 handler GUID：
-
-```powershell
-.\dist\win-x64\lichora.exe 12345678-1234-1234-1234-123456789abc --graphics-mode=auto
-```
-
-handler GUID 用作 IPC v2 session namespace。当前 handler runtime 的 `control` 只处理 `Shutdown`、`AddBrowser`、`RemoveBrowser` 和 `ResizeBrowser`；`session`、`status` 已有协议与映射，宿主会打开两者，当前仅 `status` 暴露宿主读取 API。原生插件输入、帧和输出热路径统一使用 `ebi_browser_input_open`、`ebi_browser_frame_open` 和 `ebi_browser_output_open` 得到的 typed browser handle；旧 `*_for_browser` session-handle 兼容导出已移除。
-
-旧启动参数 `--heartbeat-timeout-ms` 和 `--heartbeat-stall-grace-ms` 不再支持。当前 IPC v2 不保留旧 heartbeat 退出机制，传入这些参数会按未知选项失败。
-
-单 URL 模式仍可用于本地手工调试：
-
-```powershell
-.\target\release\lichora.exe --url https://example.com --width 1280 --height 720
-```
-
-单 URL 模式不是宿主集成入口；宿主集成入口是 handler GUID 模式。
-
-## IPC v2 通道
-
-| 通道 | 方向 | 用途 |
-| --- | --- | --- |
-| `session` | 双向 | 已有协议与映射，宿主会打开；当前不暴露宿主读取 API |
-| `control` | Host -> Browser | 当前仅处理 `Shutdown`、`AddBrowser`、`RemoveBrowser` 和 `ResizeBrowser` |
-| `status` | Browser -> Host | 已有协议与映射，宿主会打开并暴露读取 API |
-| `input` | Host -> Browser | 鼠标、键盘、IME 和脚本请求 |
-| `frame` | Browser -> Host | BGRA frame ring 和 dirty rect |
-| `output` | Browser -> Host | caret、surrounding text、ownership、script result 和 page event payload |
-
-`docs/protocol.md` 记录当前协议入口和验证边界。
-
-## 开发文档
-
-- [Development](docs/development.md)
-- [Protocol](docs/protocol.md)
-- [Engineering Reviews](docs/reviews/)
-- [Historical Archive](docs/archive/aggregate-workspace/README.md)（仅供历史追溯，不作为当前架构依据）
-
-## 仓库质量检查
-
-提交前可从仓库根目录运行 runtime 质量入口：
+提交 runtime 代码前运行：
 
 ```powershell
 .\scripts\check-quality.ps1
 ```
 
-该入口只覆盖本仓 Rust 代码：`cargo fmt --all -- --check`、`cargo clippy --all-targets --all-features -- -D warnings` 和 `cargo test --no-default-features --all-targets`。overlay 与 Unity host 在各自仓库维护质量门禁。
+该入口会运行 Rust 格式检查、Clippy 和测试。它只覆盖 runtime 仓库，不覆盖 Unity host 或 overlay；这两个项目在各自仓库维护检查入口。
+
+## 文档
+
+- [开发说明](docs/development.md)
+- [IPC 协议](docs/protocol.md)
+- [工程评审记录](docs/reviews/)
